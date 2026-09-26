@@ -135,6 +135,49 @@ awake with the screen off — that's intended.
 
 ## 7. Updating
 
+### Automatic (recommended)
+
+With `AUTO_UPDATE=true` in `.env`, `run.sh` starts `deploy/termux/autoupdate.sh`
+beside the bot. Every 5 minutes it checks GitHub; when `main` has new commits
+it pulls them, runs `npm ci` only if `package.json`/`package-lock.json`
+changed, builds into `dist-next/`, swaps that in, and restarts the bot. Merge
+a PR → the phone is running it within ~5 minutes plus build time.
+
+If a commit fails to build, the phone rolls back to the commit it was running,
+keeps the bot up on the old build, and skips that commit until a newer one
+lands. Everything is logged with an `[autoupdate]` prefix in the bot log.
+
+One-time setup, because the repo is private and the updater can't type a
+password. Inside Debian:
+
+```bash
+cd ~/Whatsapp-bot
+git config credential.helper store
+git pull
+```
+
+At the password prompt paste a **fine-grained personal access token** (GitHub
+→ Settings → Developer settings → Fine-grained tokens) scoped to **only**
+`Dinaltium/Whatsapp-bot` with **Contents: Read-only**. `credential.helper
+store` saves it in plain text in `~/.git-credentials`, which is why it should
+be read-only and limited to this one repo. Then add to `.env`:
+
+```
+AUTO_UPDATE=true
+```
+
+and `bash ~/botctl.sh restart` from Termux.
+
+Notes:
+- The phone checkout must not have local commits; if it has diverged from
+  `main` the updater logs it and does nothing.
+- Changes to `deploy/termux/run.sh` itself take effect on the next
+  `bash ~/botctl.sh restart` (or reboot), not on the automatic restart.
+- `AUTO_UPDATE_INTERVAL_SEC` (default 300) and `AUTO_UPDATE_BRANCH`
+  (default `main`) tune it.
+
+### Manual
+
 ```bash
 proot-distro login debian -- bash -c "cd ~/Whatsapp-bot && git pull && npm ci --no-audit --no-fund && npm run build"
 bash ~/botctl.sh restart
