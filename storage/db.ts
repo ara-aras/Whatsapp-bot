@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { getDatabaseUrl } from "./neonAuthStateStore";
 
 // Global DB pool holder
@@ -84,6 +84,26 @@ export function getPool(): Pool | null {
   } catch (error) {
     console.error("⚠️ Failed to initialize dbPool:", error);
     return null;
+  }
+}
+
+// Runs `fn` inside BEGIN/COMMIT on one dedicated connection. A transaction
+// must not go through pool.query(): each call may land on a different client.
+export async function withTransaction<T>(
+  pool: Pool,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -233,6 +253,11 @@ export async function ensureSchema(): Promise<void> {
       ALTER TABLE dk24_mentors ADD COLUMN IF NOT EXISTS email TEXT;
       ALTER TABLE dk24_mentors ADD COLUMN IF NOT EXISTS phone TEXT;
       ALTER TABLE dk24_mentors ALTER COLUMN expertise DROP NOT NULL;
+
+      ALTER TABLE dk24_events ADD COLUMN IF NOT EXISTS start_at TIMESTAMPTZ;
+      ALTER TABLE dk24_events ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ;
+      CREATE INDEX IF NOT EXISTS dk24_events_month_year_idx ON dk24_events (month_year);
+      ALTER TABLE dk24_cache_log ADD COLUMN IF NOT EXISTS hash TEXT;
 
       CREATE TABLE IF NOT EXISTS wa_allowed_groups (
         id SERIAL PRIMARY KEY,
