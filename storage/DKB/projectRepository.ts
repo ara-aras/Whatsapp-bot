@@ -1,5 +1,10 @@
-import { getPool } from "../db";
-import { isCacheValid, markCacheUpdated } from "../core/cacheRepository";
+import { getPool, withTransaction } from "../db";
+import {
+  getCacheHash,
+  isCacheValid,
+  markCacheUpdated,
+} from "../core/cacheRepository";
+import { contentHash, fetchDk24Json } from "./dk24Api";
 
 export interface ProjectContributor {
   kind: string; // "professional" | "student"
@@ -23,17 +28,8 @@ export interface Project {
 
 // Fetches the live project list from the dk24.org public API.
 export async function fetchProjectsLive(): Promise<Project[]> {
-  const baseUrl = process.env.DK24_API_BASE_URL || "https://dk24.org";
-  const cleanBaseUrl = baseUrl.replace(/\/$/, "");
-  const url = `${cleanBaseUrl}/api/v1/projects`;
-  console.log(`📡 Fetching projects from API: ${url}`);
-
   try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`API responded with status: ${res.status}`);
-    }
-    const data = (await res.json()) as { projects: any[] };
+    const data = await fetchDk24Json<{ projects: any[] }>("/api/v1/projects");
 
     const mapped: Project[] = (data.projects || []).map((p) => ({
       id: String(p.id || "").trim(),
@@ -122,8 +118,7 @@ export async function getProjects(allowFetch: boolean = true): Promise<Project[]
     console.log("Projects database is empty. Running foreground fetch...");
     const live = await getProjectsLiveLocked();
     if (live && live.length > 0) {
-      await saveProjectsToDb(live);
-      await markCacheUpdated("projects");
+      await storeProjectsIfChanged(live);
     } else {
       console.warn(
         "Foreground projects fetch returned empty array, skipping cache update to allow retry.",
@@ -141,45 +136,58 @@ export async function getProjects(allowFetch: boolean = true): Promise<Project[]
   }
 }
 
-async function saveProjectsToDb(projects: Project[]): Promise<void> {
+// Rewrites dk24_projects only when the fetched list differs from the last
+// one stored; otherwise just restarts the freshness window.
+async function storeProjectsIfChanged(projects: Project[]): Promise<void> {
+  const hash = contentHash(projects);
+  if ((await getCacheHash("projects")) === hash) {
+    await markCacheUpdated("projects");
+    return;
+  }
+  if (await saveProjectsToDb(projects)) {
+    await markCacheUpdated("projects", hash);
+  }
+}
+
+async function saveProjectsToDb(projects: Project[]): Promise<boolean> {
   const pool = getPool();
-  if (!pool || projects.length === 0) return;
+  if (!pool || projects.length === 0) return false;
 
   try {
-    await pool.query("BEGIN");
-    // Full replace to stay perfectly in sync with the source of truth.
-    await pool.query("DELETE FROM dk24_projects");
-
-    for (const p of projects) {
-      if (!p.id) continue;
-      await pool.query(
-        `
-        INSERT INTO dk24_projects (id, title, description, tags, image, link, github, categories, contributors, last_updated)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-        ON CONFLICT (id) DO UPDATE SET
-          title = EXCLUDED.title, description = EXCLUDED.description,
-          tags = EXCLUDED.tags, image = EXCLUDED.image, link = EXCLUDED.link,
-          github = EXCLUDED.github, categories = EXCLUDED.categories,
-          contributors = EXCLUDED.contributors, last_updated = NOW()
-      `,
-        [
-          p.id,
-          p.title,
-          p.description,
-          p.tags,
-          p.image || null,
-          p.link || null,
-          p.github || null,
-          p.categories,
-          JSON.stringify(p.contributors),
-        ],
-      );
-    }
-
-    await pool.query("COMMIT");
+    await withTransaction(pool, async (client) => {
+      // Full replace to stay perfectly in sync with the source of truth.
+      await client.query("DELETE FROM dk24_projects");
+  
+      for (const p of projects) {
+        if (!p.id) continue;
+        await client.query(
+          `
+          INSERT INTO dk24_projects (id, title, description, tags, image, link, github, categories, contributors, last_updated)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            title = EXCLUDED.title, description = EXCLUDED.description,
+            tags = EXCLUDED.tags, image = EXCLUDED.image, link = EXCLUDED.link,
+            github = EXCLUDED.github, categories = EXCLUDED.categories,
+            contributors = EXCLUDED.contributors, last_updated = NOW()
+        `,
+          [
+            p.id,
+            p.title,
+            p.description,
+            p.tags,
+            p.image || null,
+            p.link || null,
+            p.github || null,
+            p.categories,
+            JSON.stringify(p.contributors),
+          ],
+        );
+      }
+    });
+    return true;
   } catch (error) {
-    await pool.query("ROLLBACK");
     console.error("Failed to save projects to database:", error);
+    return false;
   }
 }
 
@@ -187,8 +195,7 @@ function triggerBackgroundProjectsFetch(): void {
   getProjectsLiveLocked()
     .then(async (live) => {
       if (live && live.length > 0) {
-        await saveProjectsToDb(live);
-        await markCacheUpdated("projects");
+        await storeProjectsIfChanged(live);
         console.log("Background projects fetch completed successfully.");
       } else {
         console.warn(

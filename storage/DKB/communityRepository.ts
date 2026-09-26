@@ -1,5 +1,10 @@
-import { getPool } from "../db";
-import { isCacheValid, markCacheUpdated } from "../core/cacheRepository";
+import { getPool, withTransaction } from "../db";
+import {
+  getCacheHash,
+  isCacheValid,
+  markCacheUpdated,
+} from "../core/cacheRepository";
+import { contentHash, fetchDk24Json } from "./dk24Api";
 
 export interface CommunityRep {
   name: string;
@@ -19,19 +24,12 @@ export interface Club {
 }
 
 export async function scrapeClubsLive(): Promise<Club[]> {
-  const baseUrl = process.env.DK24_API_BASE_URL || "https://dk24.org";
-  const cleanBaseUrl = baseUrl.replace(/\/$/, "");
-  const url = `${cleanBaseUrl}/api/v1/communities`;
-  console.log(`📡 Fetching communities from API: ${url}`);
-
   try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`API responded with status: ${res.status}`);
-    }
-    const data = (await res.json()) as { communities: any[] };
+    const data = await fetchDk24Json<{ communities: any[] }>(
+      "/api/v1/communities",
+    );
 
-    const mappedClubs: Club[] = data.communities.map((c) => {
+    const mappedClubs: Club[] = (data.communities || []).map((c) => {
       const name = c.name || "";
       const id = name
         .toLowerCase()
@@ -131,8 +129,7 @@ export async function getClubs(allowScrape: boolean = true): Promise<Club[]> {
     console.log("Clubs database is empty. Running foreground scraping...");
     const liveClubs = await getClubsLiveLocked();
     if (liveClubs && liveClubs.length > 0) {
-      await saveClubsToDb(liveClubs);
-      await markCacheUpdated("clubs");
+      await storeClubsIfChanged(liveClubs);
     } else {
       console.warn("Foreground clubs scrape returned empty array, skipping cache update to allow retry.");
     }
@@ -150,39 +147,56 @@ export async function getClubs(allowScrape: boolean = true): Promise<Club[]> {
   }
 }
 
-async function saveClubsToDb(clubs: Club[]): Promise<void> {
+// Rewrites dk24_clubs only when the fetched list differs from the last one
+// stored; otherwise just restarts the freshness window.
+async function storeClubsIfChanged(clubs: Club[]): Promise<void> {
+  const hash = contentHash(clubs);
+  if ((await getCacheHash("clubs")) === hash) {
+    await markCacheUpdated("clubs");
+    return;
+  }
+  if (await saveClubsToDb(clubs)) {
+    await markCacheUpdated("clubs", hash);
+  }
+}
+
+async function saveClubsToDb(clubs: Club[]): Promise<boolean> {
   const pool = getPool();
-  if (!pool || clubs.length === 0) return;
+  if (!pool || clubs.length === 0) return false;
 
   try {
-    await pool.query("BEGIN");
+    await withTransaction(pool, async (client) => {
+      // Delete existing records to maintain perfectly dynamic synchronization
+      await client.query("DELETE FROM dk24_clubs");
 
-    // Delete existing records to maintain perfectly dynamic synchronization
-    await pool.query("DELETE FROM dk24_clubs");
-
-    for (const c of clubs) {
-      await pool.query(
-        `
-        INSERT INTO dk24_clubs (id, name, college, description, website, logo, pocs, representatives, last_updated)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-      `,
-        [
-          c.id,
-          c.name,
-          c.college,
-          c.description,
-          c.website || null,
-          c.logo || null,
-          JSON.stringify(c.pocs),
-          JSON.stringify(c.representatives),
-        ],
-      );
-    }
-
-    await pool.query("COMMIT");
+      for (const c of clubs) {
+        await client.query(
+          `
+          INSERT INTO dk24_clubs (id, name, college, description, website, logo, pocs, representatives, last_updated)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name, college = EXCLUDED.college,
+            description = EXCLUDED.description, website = EXCLUDED.website,
+            logo = EXCLUDED.logo, pocs = EXCLUDED.pocs,
+            representatives = EXCLUDED.representatives, last_updated = NOW()
+        `,
+          [
+            c.id,
+            c.name,
+            c.college,
+            c.description,
+            c.website || null,
+            c.logo || null,
+            JSON.stringify(c.pocs),
+            JSON.stringify(c.representatives),
+          ],
+        );
+      }
+    });
+    return true;
   } catch (error) {
-    await pool.query("ROLLBACK");
     console.error("Failed to save clubs to database:", error);
+    return false;
   }
 }
 
@@ -191,8 +205,7 @@ function triggerBackgroundClubsScrape(): void {
   getClubsLiveLocked()
     .then(async (live) => {
       if (live && live.length > 0) {
-        await saveClubsToDb(live);
-        await markCacheUpdated("clubs");
+        await storeClubsIfChanged(live);
         console.log("Background clubs scrape completed successfully.");
       } else {
         console.warn("Background clubs scrape returned empty array, skipping cache update.");
