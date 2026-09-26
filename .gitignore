@@ -3,6 +3,11 @@ node_modules/
 
 # Build output
 dist/
+dist-next/
+dist-old/
+
+# Termux auto-updater restart marker
+.restart-requested
 
 # Auth state (session keys - never commit)
 auth/
