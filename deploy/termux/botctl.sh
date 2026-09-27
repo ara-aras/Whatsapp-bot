@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Control the bot from TERMUX (not from inside Debian).
 #
-#   bash botctl.sh install      copy this script to ~/botctl.sh + set up auto-start on boot
+#   bash botctl.sh install      create ~/botctl.sh (points here) + set up auto-start on boot
 #   bash ~/botctl.sh start      start in the background (tmux session "wabot")
 #   bash ~/botctl.sh stop
 #   bash ~/botctl.sh restart    e.g. after `git pull` + build
@@ -13,7 +13,14 @@ set -euo pipefail
 DISTRO="${DISTRO:-debian}"
 REPO="${REPO:-/root/Whatsapp-bot}"
 SESSION="wabot"
-ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
+# proot-distro moved the rootfs: containers/<distro>/rootfs in newer releases,
+# installed-rootfs/<distro> in older ones. Use whichever exists.
+ROOTFS=""
+for dir in "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs" \
+           "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"; do
+  if [ -d "$dir" ]; then ROOTFS="$dir"; break; fi
+done
+[ -n "$ROOTFS" ] || { echo "Debian rootfs not found - run: proot-distro install $DISTRO" >&2; exit 1; }
 LOG="$ROOTFS/root/whatsapp-bot-logs/bot.log"
 
 need() { command -v "$1" >/dev/null || { echo "Missing $1: pkg install $2" >&2; exit 1; }; }
@@ -41,7 +48,10 @@ stop() {
 }
 
 install() {
-  cp -f "$0" "$HOME/botctl.sh"
+  # A pointer, not a copy: fixes to this script reach the phone through
+  # git pull / auto-update without re-running install.
+  printf '#!/data/data/com.termux/files/usr/bin/bash\nexec bash "%s" "$@"\n' \
+    "$ROOTFS$REPO/deploy/termux/botctl.sh" > "$HOME/botctl.sh"
   chmod +x "$HOME/botctl.sh"
   mkdir -p "$HOME/.termux/boot"
   cat > "$HOME/.termux/boot/start-wabot" <<'EOF'

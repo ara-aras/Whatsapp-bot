@@ -113,11 +113,16 @@ exit
 Back in plain Termux:
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/debian/root/Whatsapp-bot/deploy/termux/botctl.sh install
+bash $PREFIX/var/lib/proot-distro/containers/debian/rootfs/root/Whatsapp-bot/deploy/termux/botctl.sh install
 bash ~/botctl.sh start
 ```
 
-`install` copies the control script to `~/botctl.sh` and creates
+(Older `proot-distro` versions keep Debian at
+`$PREFIX/var/lib/proot-distro/installed-rootfs/debian/` instead; use that
+prefix if the path above doesn't exist.)
+
+`install` creates `~/botctl.sh`, a pointer to the script in the repo (so it
+stays current with auto-update), and creates
 `~/.termux/boot/start-wabot`, so the bot comes back after a reboot.
 
 Day to day:
