@@ -20,10 +20,7 @@ export const DKB_HELP_TEXT = [
   "DKB - DK24 (Developer Kommunity 24) Assistant",
   "Available Commands:",
   "\u2022 !help - Show this help",
-  "\u2022 !ping - Check bot response and status",
   "\u2022 !hello - Check bot availability",
-  "\u2022 !whoami - Show your WhatsApp id",
-  "\u2022 !getjid - Show this chat's id",
   "\u2022 !reset - Reset your conversation context",
   "\u2022 !clubs - List all official member communities in the DK24 network",
   "\u2022 !club <name> - Get detailed spotlight card for a specific member community",
@@ -45,5 +42,5 @@ export const DKB_MENTOR_HELP_TEXT = [
   "Mentor commands (mentor role required):",
   "\u2022 !addmentor -n <name> -o <org> [-e <expertise>] [-@ <email>] [...] - Add a mentor",
   "\u2022 !editmentor -id <id> -<flag> <value> - Update a mentor field",
-  "\u2022 !rmmentor -id <id> - Remove a mentor",
+  "\u2022 !rmmentor -id <id> (or !delmentor) - Remove a mentor",
 ].join("\n");

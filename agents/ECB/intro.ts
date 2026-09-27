@@ -13,11 +13,8 @@ export const DEFAULT_TEXT =
 export const ECB_HELP_TEXT = [
   "ECB - EmbedClub Assistant",
   "Available Commands:",
-  "\u2022 !ping - Check bot response and status",
   "\u2022 !hello - Check bot availability",
   "\u2022 !help - Show this help menu",
-  "\u2022 !whoami - Show your WhatsApp id",
-  "\u2022 !getjid - Show this chat's id",
   "\u2022 !projects - List ECB projects by status",
   "\u2022 !events - List upcoming ECB events",
   "\u2022 !deadlines - List upcoming deadlines",

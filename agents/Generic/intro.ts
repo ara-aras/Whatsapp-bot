@@ -3,8 +3,10 @@ const OWNER_NAME = process.env.OWNER_NAME || "the owner";
 export const GENERIC_HELP_TEXT = [
   `${OWNER_NAME}'s automated assistant`,
   "",
-  "• !chat <message> — talk to the assistant (e.g. !chat hello)",
+  "• !<message> — talk to the assistant (e.g. !hello there)",
+  "• !hello — check the bot is online",
   "• !reset — clear our chat context",
+  "• !help — show this help",
   "",
   `This is an automated responder. ${OWNER_NAME} will reply personally when available.`,
 ].join("\n");

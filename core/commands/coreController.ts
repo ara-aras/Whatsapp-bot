@@ -14,15 +14,21 @@ const ADMIN_HELP_TEXT = [
   "Allowlist (run in the target chat/group, or target by id):",
   "• !add [-g|-c] [jid] [-bid <0-3>] — allow THIS (or a given) chat/group; default Bot 1",
   "• !rm — remove THIS chat/group (or -gid/-cid <id>); confirm with !YES",
-  "• !edit -bid <n> — reassign THIS chat/group's bot (or -gid/-cid <id> -bid <n>)",
+  "• !edit -bid <n> — reassign THIS chat/group's bot (or -gid/-cid <id> -bid <n>); confirm with !YES",
   "• !enable / !disable — toggle THIS chat/group (or -gid/-cid <id>)",
   "• !listgroups · !listchats — list allowlisted groups/chats",
-  "• !findgroups [-f <q>] [-p] · !findchats — search joined groups / known chats",
+  "• !findgroups [-f <q>] [-p <page>] · !findchats — search joined groups / known chats",
   "",
   "Roles & ops (DKB):",
   "• !manage mentor -l | -all [-rm] | -jid <phone> [-rm] — mentor role management",
-  "• !notify -id <groupId> — set the member-join notify group",
-  "• !neonping · !neonconnect — database diagnostics",
+  "• !notify -gid <groupId> | off — member-join notify group (plain !notify shows it)",
+  "",
+  "Utilities:",
+  "• !ping — pong · !getjid — this chat's JID · !whoami — your JID (own DM only)",
+  "• !remindme <n>[m|h|d] <message> — reminder (e.g. !remindme 30m check servers)",
+  "• !reveal — reply to a view-once message to get it privately; !reveal! posts it in the chat",
+  "• !setname <jid|lid> <name> — set a contact's display name · !cleanupnames — clear bad cached names",
+  "• !neonping — database check · !neonconnect — hard reconnect (restarts the bot)",
   "",
   "Info:",
   "• !help -bid <0-3> — a specific bot's user commands",
@@ -110,7 +116,7 @@ registerCommand({
 });
 
 // ── HELP COMMAND ──
-// Owner (admin): unrestricted, any chat, may point at any bot with `!help -id`.
+// Owner (admin): unrestricted, any chat, may point at any bot with `!help -bid`.
 // Group/chat member (non-admin): scoped to THIS chat's bot (no bot number),
 //   rate-limited per chat + per bot (see helpService.checkHelpGate), and
 //   role-gated (mentors additionally see the mentor command block).
