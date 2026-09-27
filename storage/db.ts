@@ -70,14 +70,15 @@ export function getPool(): Pool | null {
       keepAlive: true,
       keepAliveInitialDelayMillis: 10000,
       ssl: sslDisabled ? false : { rejectUnauthorized },
+      // Enforced by pg on our side: no query waits more than 30s. This replaces
+      // a fire-and-forget "SET statement_timeout" on connect, which raced the
+      // pool's first query on the same client (pg DeprecationWarning, an error
+      // in pg 9) and was ignored anyway by Neon's transaction-mode pooler.
+      query_timeout: Number(process.env.DB_QUERY_TIMEOUT_MS || 30000),
     });
 
     dbPool.on("error", (err) => {
       console.warn("⚠️ dbPool error:", err.message);
-    });
-
-    dbPool.on("connect", (client) => {
-      client.query("SET statement_timeout = '30s'").catch(() => {});
     });
 
     return dbPool;
