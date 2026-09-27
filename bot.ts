@@ -11,6 +11,7 @@ import qrcode from "qrcode-terminal";
 import pino from "pino";
 import "dotenv/config";
 import { installPlatformShims } from "./utils/platformShims";
+import { describeError } from "./utils/describeError";
 // Before anything that might probe the network stack (Termux/proot guard).
 installPlatformShims();
 import { installLibsignalQuiet } from "./utils/quietLibsignal";
@@ -620,8 +621,7 @@ async function startBot(): Promise<void> {
       }
       authStore = persistentAuthStore;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`FATAL: Neon auth storage unavailable (${message}).`);
+      console.error(`FATAL: Neon auth storage unavailable (${describeError(error)}).`);
       console.error("Since local fallback is disabled, exiting the process.");
       process.exit(1);
     }
