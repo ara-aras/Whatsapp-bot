@@ -56,9 +56,13 @@ install() {
   mkdir -p "$HOME/.termux/boot"
   cat > "$HOME/.termux/boot/start-wabot" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
+# Output goes to ~/boot.log: a boot that fails has no terminal to show it.
+exec >> "$HOME/boot.log" 2>&1
+echo "=== boot $(date)"
 termux-wake-lock
 sleep 20   # let networking come up after boot
 bash "$HOME/botctl.sh" start
+echo "=== done $(date)"
 EOF
   chmod +x "$HOME/.termux/boot/start-wabot"
   echo "installed ~/botctl.sh and ~/.termux/boot/start-wabot"
