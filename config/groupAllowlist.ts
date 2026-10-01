@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+
 interface GroupEntry {
   id: number;
   jid: string;
@@ -6,6 +9,37 @@ interface GroupEntry {
 }
 
 let allowedGroups: GroupEntry[] | null = null;
+
+function loadFromFile(filePath: string): { jid: string; botNumber: number }[] {
+  try {
+    const absolutePath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(process.cwd(), filePath);
+    if (!fs.existsSync(absolutePath)) return [];
+    const content = fs.readFileSync(absolutePath, "utf8");
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((entry) => {
+          if (typeof entry === "string") {
+            return { jid: entry.trim(), botNumber: 0 };
+          }
+          if (entry && typeof entry === "object" && entry.jid) {
+            const botNum = parseInt(entry.botNumber ?? entry.bot_number ?? "0", 10);
+            return {
+              jid: String(entry.jid).trim(),
+              botNumber: isNaN(botNum) ? 0 : botNum,
+            };
+          }
+          return null;
+        })
+        .filter((e): e is { jid: string; botNumber: number } => Boolean(e && e.jid));
+    }
+  } catch (error) {
+    console.warn(`⚠️ Failed to parse allowed groups file ${filePath}:`, error);
+  }
+  return [];
+}
 
 function loadFromEnv(): { jid: string; botNumber: number }[] {
   const env = process.env.ALLOWED_GROUPS || "";
@@ -21,11 +55,23 @@ function loadFromEnv(): { jid: string; botNumber: number }[] {
     });
 }
 
+function loadStaticEntries(): { jid: string; botNumber: number }[] {
+  const envEntries = loadFromEnv();
+  const filePath = process.env.ALLOWED_GROUPS_FILE || "allowed-groups.json";
+  const fileEntries = filePath ? loadFromFile(filePath) : [];
+
+  const map = new Map<string, { jid: string; botNumber: number }>();
+  for (const item of [...fileEntries, ...envEntries]) {
+    if (item.jid) map.set(item.jid, item);
+  }
+  return Array.from(map.values());
+}
+
 function ensureLoaded(): void {
   if (allowedGroups !== null) return;
 
-  const envEntries = loadFromEnv();
-  allowedGroups = envEntries.map((e, idx) => ({
+  const staticEntries = loadStaticEntries();
+  allowedGroups = staticEntries.map((e, idx) => ({
     id: 99000 + idx,
     jid: e.jid,
     botNumber: e.botNumber,
@@ -33,19 +79,36 @@ function ensureLoaded(): void {
   }));
 }
 
+function saveToFile(entries: GroupEntry[]): void {
+  try {
+    const filePath = process.env.ALLOWED_GROUPS_FILE || "allowed-groups.json";
+    const absolutePath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(process.cwd(), filePath);
+    const data = entries.map((e) => ({
+      jid: e.jid,
+      botNumber: e.botNumber,
+      enabled: e.enabled,
+    }));
+    fs.writeFileSync(absolutePath, JSON.stringify(data, null, 2), "utf8");
+  } catch (error) {
+    console.warn("⚠️ Failed to write allowed groups file:", error);
+  }
+}
+
 async function init(): Promise<void> {
-  const envEntries = loadFromEnv();
+  const staticEntries = loadStaticEntries();
 
   let dbEntries: GroupEntry[] = [];
   try {
     const { getAllowedGroups, addAllowedGroup } = await import("../storage/core/allowlistRepository");
 
-    // Sync any env entries that don't exist in DB yet
+    // Sync any env/file entries that don't exist in DB yet
     const currentDb = await getAllowedGroups();
-    for (const envEnt of envEntries) {
-      const exists = currentDb.some((dbE) => dbE.jid === envEnt.jid);
+    for (const ent of staticEntries) {
+      const exists = currentDb.some((dbE) => dbE.jid === ent.jid);
       if (!exists) {
-        await addAllowedGroup(envEnt.jid, envEnt.botNumber);
+        await addAllowedGroup(ent.jid, ent.botNumber);
       }
     }
 
@@ -57,8 +120,8 @@ async function init(): Promise<void> {
       enabled: e.enabled,
     }));
   } catch (error) {
-    console.warn("⚠️ Failed to load allowed groups from Neon DB, using env fallback:", error);
-    dbEntries = envEntries.map((e, idx) => ({
+    console.warn("⚠️ Failed to load allowed groups from Neon DB, using fallback:", error);
+    dbEntries = staticEntries.map((e, idx) => ({
       id: 99000 + idx,
       jid: e.jid,
       botNumber: e.botNumber,
@@ -67,6 +130,9 @@ async function init(): Promise<void> {
   }
 
   allowedGroups = dbEntries;
+  if (allowedGroups.length > 0) {
+    saveToFile(allowedGroups);
+  }
 }
 
 function getGroupBot(
@@ -119,6 +185,7 @@ async function addGroup(
     const ok = await addAllowedGroup(jid, botNumber);
     if (ok) {
       await init();
+      saveToFile(allowedGroups!);
       return true;
     }
   } catch (error) {
@@ -137,6 +204,7 @@ async function addGroup(
       enabled: true,
     });
   }
+  saveToFile(allowedGroups!);
   return true;
 }
 
@@ -151,6 +219,7 @@ async function removeGroupById(id: number): Promise<boolean> {
     const ok = await removeAllowedGroupById(id);
     if (ok) {
       await init();
+      saveToFile(allowedGroups!);
       return true;
     }
   } catch (error) {
@@ -160,6 +229,7 @@ async function removeGroupById(id: number): Promise<boolean> {
   const index = allowedGroups!.findIndex((g) => g.id === id);
   if (index !== -1) {
     allowedGroups!.splice(index, 1);
+    saveToFile(allowedGroups!);
     return true;
   }
   return false;
@@ -176,6 +246,7 @@ async function editGroupBot(id: number, botNumber: number): Promise<boolean> {
     const ok = await setGroupBotNumber(id, botNumber);
     if (ok) {
       await init();
+      saveToFile(allowedGroups!);
       return true;
     }
   } catch (error) {
@@ -183,6 +254,7 @@ async function editGroupBot(id: number, botNumber: number): Promise<boolean> {
   }
 
   entry.botNumber = botNumber;
+  saveToFile(allowedGroups!);
   return true;
 }
 
@@ -197,6 +269,7 @@ async function setGroupEnabled(id: number, enabled: boolean): Promise<boolean> {
     const ok = await dbSetEnabled(id, enabled);
     if (ok) {
       await init();
+      saveToFile(allowedGroups!);
       return true;
     }
   } catch (error) {
@@ -204,6 +277,7 @@ async function setGroupEnabled(id: number, enabled: boolean): Promise<boolean> {
   }
 
   entry.enabled = enabled;
+  saveToFile(allowedGroups!);
   return true;
 }
 

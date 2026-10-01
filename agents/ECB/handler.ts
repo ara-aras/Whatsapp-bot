@@ -46,7 +46,9 @@ export async function handleMessage(
     };
   }
 
-  if (normalizedPrompt.startsWith("!projects")) {
+  const cleanPrompt = normalizedPrompt.replace(/^!+/, "").trim();
+
+  if (cleanPrompt.startsWith("projects")) {
     try {
       const projects = await getProjects();
       const reply = projects.length > 0
@@ -59,7 +61,7 @@ export async function handleMessage(
     }
   }
 
-  if (normalizedPrompt.startsWith("!events")) {
+  if (cleanPrompt.startsWith("events")) {
     try {
       const events = await getEvents();
       const reply = events.length > 0
@@ -72,7 +74,7 @@ export async function handleMessage(
     }
   }
 
-  if (normalizedPrompt.startsWith("!deadlines")) {
+  if (cleanPrompt.startsWith("deadlines")) {
     try {
       const deadlines = await getDeadlines();
       const reply = deadlines.length > 0

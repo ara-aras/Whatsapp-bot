@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+
 interface ChatEntry {
   id: number;
   jid: string;
@@ -12,6 +15,37 @@ function normalizeChatJid(
 ): string | null | undefined {
   if (!jid || typeof jid !== "string") return jid;
   return jid;
+}
+
+function loadFromFile(filePath: string): { jid: string; botNumber: number }[] {
+  try {
+    const absolutePath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(process.cwd(), filePath);
+    if (!fs.existsSync(absolutePath)) return [];
+    const content = fs.readFileSync(absolutePath, "utf8");
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((entry) => {
+          if (typeof entry === "string") {
+            return { jid: entry.trim(), botNumber: 0 };
+          }
+          if (entry && typeof entry === "object" && entry.jid) {
+            const botNum = parseInt(entry.botNumber ?? entry.bot_number ?? "0", 10);
+            return {
+              jid: String(entry.jid).trim(),
+              botNumber: isNaN(botNum) ? 0 : botNum,
+            };
+          }
+          return null;
+        })
+        .filter((e): e is { jid: string; botNumber: number } => Boolean(e && e.jid));
+    }
+  } catch (error) {
+    console.warn(`⚠️ Failed to parse allowed chats file ${filePath}:`, error);
+  }
+  return [];
 }
 
 function loadFromEnv(): { jid: string; botNumber: number }[] {
@@ -31,11 +65,23 @@ function loadFromEnv(): { jid: string; botNumber: number }[] {
     });
 }
 
+function loadStaticEntries(): { jid: string; botNumber: number }[] {
+  const envEntries = loadFromEnv();
+  const filePath = process.env.ALLOWED_CHATS_FILE || "allowed-chats.json";
+  const fileEntries = filePath ? loadFromFile(filePath) : [];
+
+  const map = new Map<string, { jid: string; botNumber: number }>();
+  for (const item of [...fileEntries, ...envEntries]) {
+    if (item.jid) map.set(item.jid, item);
+  }
+  return Array.from(map.values());
+}
+
 function ensureLoaded(): void {
   if (allowedChats !== null) return;
 
-  const envEntries = loadFromEnv();
-  allowedChats = envEntries.map((e, idx) => ({
+  const staticEntries = loadStaticEntries();
+  allowedChats = staticEntries.map((e, idx) => ({
     id: 99000 + idx,
     jid: e.jid,
     botNumber: e.botNumber,
@@ -43,19 +89,36 @@ function ensureLoaded(): void {
   }));
 }
 
+function saveToFile(entries: ChatEntry[]): void {
+  try {
+    const filePath = process.env.ALLOWED_CHATS_FILE || "allowed-chats.json";
+    const absolutePath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(process.cwd(), filePath);
+    const data = entries.map((e) => ({
+      jid: e.jid,
+      botNumber: e.botNumber,
+      enabled: e.enabled,
+    }));
+    fs.writeFileSync(absolutePath, JSON.stringify(data, null, 2), "utf8");
+  } catch (error) {
+    console.warn("⚠️ Failed to write allowed chats file:", error);
+  }
+}
+
 async function init(): Promise<void> {
-  const envEntries = loadFromEnv();
+  const staticEntries = loadStaticEntries();
 
   let dbEntries: ChatEntry[] = [];
   try {
     const { getAllowedChats, addAllowedChat } = await import("../storage/core/allowlistRepository");
 
-    // Sync any env entries that don't exist in DB yet
+    // Sync any env/file entries that don't exist in DB yet
     const currentDb = await getAllowedChats();
-    for (const envEnt of envEntries) {
-      const exists = currentDb.some((dbE) => dbE.jid === envEnt.jid);
+    for (const ent of staticEntries) {
+      const exists = currentDb.some((dbE) => dbE.jid === ent.jid);
       if (!exists) {
-        await addAllowedChat(envEnt.jid, envEnt.botNumber);
+        await addAllowedChat(ent.jid, ent.botNumber);
       }
     }
 
@@ -67,8 +130,8 @@ async function init(): Promise<void> {
       enabled: e.enabled,
     }));
   } catch (error) {
-    console.warn("⚠️ Failed to load allowed chats from Neon DB, using env fallback:", error);
-    dbEntries = envEntries.map((e, idx) => ({
+    console.warn("⚠️ Failed to load allowed chats from Neon DB, using fallback:", error);
+    dbEntries = staticEntries.map((e, idx) => ({
       id: 99000 + idx,
       jid: e.jid,
       botNumber: e.botNumber,
@@ -77,6 +140,9 @@ async function init(): Promise<void> {
   }
 
   allowedChats = dbEntries;
+  if (allowedChats.length > 0) {
+    saveToFile(allowedChats);
+  }
 }
 
 function getChatBot(
@@ -146,6 +212,7 @@ async function addChat(
     const ok = await addAllowedChat(normalized, botNumber);
     if (ok) {
       await init();
+      saveToFile(allowedChats!);
       return true;
     }
   } catch (error) {
@@ -168,6 +235,7 @@ async function addChat(
       enabled: true,
     });
   }
+  saveToFile(allowedChats!);
   return true;
 }
 
@@ -182,6 +250,7 @@ async function removeChatById(id: number): Promise<boolean> {
     const ok = await removeAllowedChatById(id);
     if (ok) {
       await init();
+      saveToFile(allowedChats!);
       return true;
     }
   } catch (error) {
@@ -191,6 +260,7 @@ async function removeChatById(id: number): Promise<boolean> {
   const index = allowedChats!.findIndex((c) => c.id === id);
   if (index !== -1) {
     allowedChats!.splice(index, 1);
+    saveToFile(allowedChats!);
     return true;
   }
   return false;
@@ -207,6 +277,7 @@ async function editChatBot(id: number, botNumber: number): Promise<boolean> {
     const ok = await setChatBotNumber(id, botNumber);
     if (ok) {
       await init();
+      saveToFile(allowedChats!);
       return true;
     }
   } catch (error) {
@@ -214,6 +285,7 @@ async function editChatBot(id: number, botNumber: number): Promise<boolean> {
   }
 
   entry.botNumber = botNumber;
+  saveToFile(allowedChats!);
   return true;
 }
 
@@ -228,6 +300,7 @@ async function setChatEnabled(id: number, enabled: boolean): Promise<boolean> {
     const ok = await dbSetEnabled(id, enabled);
     if (ok) {
       await init();
+      saveToFile(allowedChats!);
       return true;
     }
   } catch (error) {
@@ -235,6 +308,7 @@ async function setChatEnabled(id: number, enabled: boolean): Promise<boolean> {
   }
 
   entry.enabled = enabled;
+  saveToFile(allowedChats!);
   return true;
 }
 

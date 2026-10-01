@@ -45,11 +45,15 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+.opencode/
 
 # Build/tool caches
 .cache/
 
 test.ts
+
+# Local generators & skills
+config-generator/
 
 # Security and project layout documentation (local reference only)
 security.md
@@ -59,6 +63,12 @@ prompt-review.md
 prompt.md
 promptv2.md
 extra.md
+docs/MAHORAGA*
+docs/docker-validation-guide.md
+docs/jtbd-map.md
+docs/stack-creator.md
+docs/newt-blueprint-generator.md
+docs/wiki/
 
 # Local runtime log dumps (may contain session key material)
 logs.md

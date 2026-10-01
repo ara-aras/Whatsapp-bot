@@ -65,7 +65,9 @@ export async function handleMessageUpsert(
   messages: proto.IWebMessageInfo[],
   type: string,
 ) {
-  if (type === "append") return;
+  const allowFromMe =
+    (process.env.ALLOW_FROM_ME_MESSAGES || "false").toLowerCase() === "true";
+  if (type === "append" && !allowFromMe) return;
 
   logEvent("debug", {
     event: "messages_received",
