@@ -14,18 +14,16 @@ describe("typingDelay", () => {
     expect(calculateTypingDelay("hello world")).toBeGreaterThan(0);
   });
 
-  it("result never exceeds the 55000ms ceiling", () => {
+  it("result never exceeds the 30000ms ceiling", () => {
     const veryLong = "word ".repeat(1000);
-    expect(calculateTypingDelay(veryLong)).toBeLessThanOrEqual(55000);
+    expect(calculateTypingDelay(veryLong)).toBeLessThanOrEqual(30000);
   });
 
-  it("long responses scale past the old 30s cap instead of being chopped", () => {
-    // ~2000 chars should land above 30s but below the ceiling, proving length
-    // keeps influencing the delay beyond the previous flat cap.
+  it("long responses scale up to the 20-30s ceiling", () => {
     const longText = "a".repeat(2000);
     const delay = calculateTypingDelay(longText);
-    expect(delay).toBeGreaterThan(24000);
-    expect(delay).toBeLessThanOrEqual(55000);
+    expect(delay).toBeGreaterThanOrEqual(20000);
+    expect(delay).toBeLessThanOrEqual(30000);
   });
 
   it("has some randomness across multiple runs", () => {

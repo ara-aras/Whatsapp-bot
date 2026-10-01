@@ -222,14 +222,32 @@ export function extractMessageText(
   );
 }
 
+const groupMetaCache = new Map<string, { meta: any; expiresAt: number }>();
+
+export async function getCachedGroupMetadata(
+  sock: any,
+  jid: string,
+): Promise<any> {
+  if (!sock?.groupMetadata || !jid || !jid.endsWith("@g.us")) return null;
+  const cached = groupMetaCache.get(jid);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.meta;
+  }
+  const meta = await sock.groupMetadata(jid);
+  if (meta) {
+    groupMetaCache.set(jid, { meta, expiresAt: Date.now() + 5 * 60 * 1000 });
+  }
+  return meta;
+}
+
 export async function safeGetGroupName(
   sock: any,
   jid: string,
 ): Promise<string> {
   if (!jid || !jid.endsWith("@g.us")) return "Not a Group";
   try {
-    const metadata = await sock.groupMetadata(jid);
-    return metadata.subject || "Unknown Group Name";
+    const metadata = await getCachedGroupMetadata(sock, jid);
+    return metadata?.subject || "Unknown Group Name";
   } catch (error) {
     return "Unknown Group Name";
   }
@@ -319,7 +337,7 @@ export async function shouldSkipMessage(
   // ── ANNOUNCEMENT GROUP / ADMINS-ONLY GUARDRAILS ──
   if (from && from.endsWith("@g.us")) {
     try {
-      const metadata = await sock.groupMetadata(from);
+      const metadata = await getCachedGroupMetadata(sock, from);
       if (metadata && metadata.announce) {
         // 1. Verify if the bot itself is an admin in this announcement group
         const botJid = normalizeJid(sock.user?.id || "");

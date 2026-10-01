@@ -18,19 +18,19 @@ const KNEE_CHARS = 800; // ~16s of typing before growth slows
 const SLOW_RATE_MS_PER_CHAR = 7;
 
 // Hard ceiling, with jitter so it never reads as a fixed constant to WhatsApp.
-const CEILING_MIN_MS = 45000;
-const CEILING_JITTER_MS = 10000; // ceiling is 45s..55s
+const CEILING_MIN_MS = Number(process.env.TYPING_DELAY_CEILING_MIN_MS) || 20000;
+const CEILING_JITTER_MS = Number(process.env.TYPING_DELAY_CEILING_JITTER_MS) || 10000; // ceiling is 20s..30s
 
 /**
  * Calculates a dynamic delay in milliseconds that simulates human typing.
  *
  * The curve is piecewise-linear: `FULL_RATE_MS_PER_CHAR` per character up to
  * `KNEE_CHARS`, then `SLOW_RATE_MS_PER_CHAR` beyond it, clamped to a jittered
- * 45–55s ceiling. Length keeps influencing the delay well past the old flat
- * 20–30s cap, so a long reply no longer appears typed faster than a short one.
+ * 20–30s ceiling. Length keeps influencing the delay without creating
+ * excessive multi-minute blocking.
  *
  * @param text - The text content being "typed"
- * @returns Delay in milliseconds (bounded at ~45-55s)
+ * @returns Delay in milliseconds (bounded at ~20-30s)
  */
 export function calculateTypingDelay(text: string): number {
   const textLength = String(text || "").length;

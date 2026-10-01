@@ -59,18 +59,33 @@ async function callGroqOnce(
   }
 
   const fetchFn = (globalThis as any).fetch ?? (await import("node-fetch")).default;
-  const res = await fetchFn("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${groqApiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.4,
-      messages: [{ role: "system", content: systemPrompt }, ...messages],
-    }),
-  });
+  const timeoutMs = Number(process.env.GROQ_TIMEOUT_MS) || 25000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: any;
+  try {
+    res = await fetchFn("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${groqApiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.4,
+        messages: [{ role: "system", content: systemPrompt }, ...messages],
+      }),
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError" || controller.signal.aborted) {
+      throw new GroqServerError(504);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     if (res.status === 429) throw new GroqRateLimitError();
