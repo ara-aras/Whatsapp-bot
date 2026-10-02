@@ -150,11 +150,12 @@ export async function searchWeb(query: string): Promise<SearchResponse> {
     const { searchWithTavily } = await import("./providers/tavily");
     const { searchWithExa } = await import("./providers/exa");
     const { searchWithFirecrawl } = await import("./providers/firecrawl");
+    const { searchWithBrave } = await import("./providers/brave");
     const { rerankResults } = await import("./reranker");
     const days = needsLiveData ? 4 : undefined;
 
     // Fan out — each provider is independent; a failure just yields null.
-    const [tav, exa, fc] = await Promise.all([
+    const [tav, exa, fc, brave] = await Promise.all([
       searchWithTavily(query, {
         news: needsLiveData,
         days,
@@ -162,15 +163,17 @@ export async function searchWeb(query: string): Promise<SearchResponse> {
       }).catch(() => null),
       searchWithExa(query, { days }).catch(() => null),
       searchWithFirecrawl(query).catch(() => null),
+      searchWithBrave(query).catch(() => null),
     ]);
 
-    const lists = [tav?.results, exa?.results, fc?.results].filter(
+    const lists = [tav?.results, exa?.results, fc?.results, brave?.results].filter(
       (l): l is SearchResult[] => Array.isArray(l) && l.length > 0,
     );
     const providersHit = [
       tav?.results?.length ? "tavily" : null,
       exa?.results?.length ? "exa" : null,
       fc?.results?.length ? "firecrawl" : null,
+      brave?.results?.length ? "brave" : null,
     ].filter(Boolean);
     console.info(`[SearchService] fan-out hit: [${providersHit.join(", ") || "none"}]`);
 

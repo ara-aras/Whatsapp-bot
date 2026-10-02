@@ -84,8 +84,43 @@ describe("liveSearchService", () => {
     expect(ctx).toContain("useActionState");
   });
 
+  it("fetches via Brave Search when BRAVE_API_KEY is configured and Tavily is absent", async () => {
+    delete process.env.TAVILY_API_KEY;
+    process.env.BRAVE_API_KEY = "test_brave_key";
+
+    const fakeFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        web: {
+          results: [
+            {
+              title: "SpaceX Starship Launch",
+              url: "https://spacex.com/launches",
+              description: "Starship Flight 7 completed successful orbital test flight.",
+            },
+          ],
+        },
+      }),
+    });
+
+    const ctx = await getLiveSearchContext("Starship Flight 7", fakeFetch as any, true);
+    expect(fakeFetch).toHaveBeenCalledWith(
+      expect.stringContaining("https://api.search.brave.com/res/v1/web/search?q=Starship%20Flight%207"),
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-Subscription-Token": "test_brave_key",
+        }),
+      }),
+    );
+    expect(ctx).toContain("SpaceX Starship Launch");
+    expect(ctx).toContain("Starship Flight 7 completed");
+    expect(ctx).toContain("https://spacex.com/launches");
+  });
+
   it("returns null gracefully if all search fetches fail", async () => {
     delete process.env.TAVILY_API_KEY;
+    delete process.env.BRAVE_API_KEY;
 
     const fakeFetch = vi.fn().mockRejectedValue(new Error("Network timeout"));
     const ctx = await getLiveSearchContext("random query", fakeFetch as any, true);

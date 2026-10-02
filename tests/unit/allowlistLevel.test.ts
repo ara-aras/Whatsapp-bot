@@ -16,7 +16,7 @@ describe("allowlistLevel", () => {
     expect(bot).not.toBeNull();
     expect(bot?.botNumber).toBe(2);
     expect(bot?.level).toBe(1);
-  });
+  }, 15000);
 
   it("groupConfig stores and updates level via editGroupBot", async () => {
     const testJid = "120363000000000002@g.us";

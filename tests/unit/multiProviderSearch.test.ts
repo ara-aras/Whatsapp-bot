@@ -70,6 +70,43 @@ describe("Exa provider", () => {
   });
 });
 
+describe("Brave provider", () => {
+  beforeEach(() => delete process.env.BRAVE_API_KEY);
+
+  it("is unconfigured without a key and returns null", async () => {
+    const { isBraveConfigured, searchWithBrave } = await import(
+      "../../services/search/providers/brave"
+    );
+    expect(isBraveConfigured()).toBe(false);
+    expect(await searchWithBrave("anything")).toBeNull();
+  });
+
+  it("maps Brave results when configured", async () => {
+    process.env.BRAVE_API_KEY = "test_brave_token";
+    const { searchWithBrave } = await import("../../services/search/providers/brave");
+
+    (globalThis as any).fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        web: {
+          results: [
+            {
+              title: "TypeScript 5.8",
+              url: "https://devblogs.microsoft.com/typescript",
+              description: "TypeScript 5.8 announcement and features.",
+            },
+          ],
+        },
+      }),
+      text: async () => "",
+    }));
+
+    const out = await searchWithBrave("typescript latest release");
+    expect(out?.results[0].url).toBe("https://devblogs.microsoft.com/typescript");
+    expect(out?.results[0].content).toContain("TypeScript 5.8");
+  });
+});
+
 describe("deepRead", () => {
   beforeEach(() => delete process.env.FIRECRAWL_API_KEY);
 

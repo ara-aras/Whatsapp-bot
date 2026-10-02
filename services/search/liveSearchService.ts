@@ -5,8 +5,9 @@
  * Uses a multi-tier cascade:
  *   1. Redis cache lookup (15 min TTL)
  *   2. Tavily AI Search API (if TAVILY_API_KEY is configured)
- *   3. DuckDuckGo HTML / instant answer fallback (zero API key)
- *   4. Strict 5-second timeout with graceful fallback
+ *   3. Brave Web Search API (if BRAVE_API_KEY is configured)
+ *   4. DuckDuckGo HTML / instant answer fallback (zero API key)
+ *   5. Strict 5-second timeout with graceful fallback
  */
 
 import crypto from "crypto";
@@ -69,6 +70,55 @@ async function searchTavily(
             title: String(item.title).trim(),
             url: String(item.url || ""),
             snippet: String(item.content).slice(0, 280).trim(),
+          });
+        }
+      }
+    }
+
+    return results;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Executes Brave Search API.
+ * Free tier: 2,000 requests/month (https://brave.com/search/api/)
+ */
+async function searchBrave(
+  query: string,
+  apiKey: string,
+  fetchFn: typeof fetch,
+): Promise<SearchResultItem[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+
+  try {
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=3`;
+    const res = await fetchFn(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Accept-Encoding": "gzip",
+        "X-Subscription-Token": apiKey,
+      },
+    });
+
+    if (!res.ok) {
+      throw new Error(`Brave Search HTTP ${res.status}`);
+    }
+
+    const data: any = await res.json();
+    const results: SearchResultItem[] = [];
+
+    if (Array.isArray(data?.web?.results)) {
+      for (const item of data.web.results.slice(0, 3)) {
+        if (item?.title && (item?.description || item?.snippet)) {
+          results.push({
+            title: String(item.title).trim(),
+            url: String(item.url || ""),
+            snippet: String(item.description || item.snippet || "").slice(0, 280).trim(),
           });
         }
       }
@@ -216,12 +266,24 @@ export async function getLiveSearchContext(
       items = await searchTavily(trimmed, tavilyKey, fetchFn);
     } catch (err) {
       console.warn(
-        `[LiveSearch] Tavily failed (${err instanceof Error ? err.message : String(err)}), falling back to DuckDuckGo...`,
+        `[LiveSearch] Tavily failed (${err instanceof Error ? err.message : String(err)}), falling back...`,
       );
     }
   }
 
-  // 3. Fallback to DuckDuckGo if no results yet
+  // 3. Try Brave Search API if no results yet and key is present
+  const braveKey = process.env.BRAVE_API_KEY;
+  if (items.length === 0 && braveKey) {
+    try {
+      items = await searchBrave(trimmed, braveKey, fetchFn);
+    } catch (err) {
+      console.warn(
+        `[LiveSearch] Brave Search failed (${err instanceof Error ? err.message : String(err)}), falling back...`,
+      );
+    }
+  }
+
+  // 4. Fallback to DuckDuckGo if no results yet
   if (items.length === 0) {
     try {
       items = await searchDuckDuckGo(trimmed, fetchFn);
