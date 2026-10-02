@@ -39,11 +39,13 @@ export interface UserSession {
     id: number;
     jid: string;
     botNumber: number;
+    level?: number;
   };
   pendingEditChat?: {
     id: number;
     jid: string;
     botNumber: number;
+    level?: number;
   };
   pendingDelete?: {
     mentorId: number;

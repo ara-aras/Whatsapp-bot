@@ -14,6 +14,7 @@ const DKBAgent = createAgent({
       ctx.groqModel,
       ctx.isAdmin,
       ctx.senderJid,
+      ctx.level ?? 1,
     ),
   getHelpText: () => DKB_HELP_TEXT,
 });

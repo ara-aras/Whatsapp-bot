@@ -12,9 +12,11 @@ export async function getGroqReply(
   groqApiKey: string | undefined,
   groqModel: string,
   userPrompt: string,
+  liveSearchContext?: string | null,
 ): Promise<string> {
   const dynamicContext = await buildDynamicContextPrompt(userPrompt);
-  const systemPrompt = `${DK24_SYSTEM_PROMPT}\n\n${dynamicContext}`;
+  const extraContext = liveSearchContext ? `\n\n${liveSearchContext}` : "";
+  const systemPrompt = `${DK24_SYSTEM_PROMPT}\n\n${dynamicContext}${extraContext}`;
 
   return getGroqReplyClient(conversationMessages, groqApiKey, groqModel, systemPrompt);
 }

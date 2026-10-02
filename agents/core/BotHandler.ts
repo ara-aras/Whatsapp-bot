@@ -17,6 +17,7 @@ export interface BotContext {
   msg: proto.IWebMessageInfo;
   groqApiKey?: string;
   groqModel: string;
+  level?: number;
 }
 
 export interface BotHandler {

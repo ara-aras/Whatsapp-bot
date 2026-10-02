@@ -5,12 +5,13 @@ interface GroupEntry {
   id: number;
   jid: string;
   botNumber: number;
+  level: number;
   enabled: boolean;
 }
 
 let allowedGroups: GroupEntry[] | null = null;
 
-function loadFromFile(filePath: string): { jid: string; botNumber: number }[] {
+function loadFromFile(filePath: string): { jid: string; botNumber: number; level: number }[] {
   try {
     const absolutePath = path.isAbsolute(filePath)
       ? filePath
@@ -22,18 +23,20 @@ function loadFromFile(filePath: string): { jid: string; botNumber: number }[] {
       return parsed
         .map((entry) => {
           if (typeof entry === "string") {
-            return { jid: entry.trim(), botNumber: 0 };
+            return { jid: entry.trim(), botNumber: 0, level: 1 };
           }
           if (entry && typeof entry === "object" && entry.jid) {
             const botNum = parseInt(entry.botNumber ?? entry.bot_number ?? "0", 10);
+            const lvl = parseInt(entry.level ?? "1", 10);
             return {
               jid: String(entry.jid).trim(),
               botNumber: isNaN(botNum) ? 0 : botNum,
+              level: isNaN(lvl) || lvl < 1 ? 1 : lvl,
             };
           }
           return null;
         })
-        .filter((e): e is { jid: string; botNumber: number } => Boolean(e && e.jid));
+        .filter((e): e is { jid: string; botNumber: number; level: number } => Boolean(e && e.jid));
     }
   } catch (error) {
     console.warn(`⚠️ Failed to parse allowed groups file ${filePath}:`, error);
@@ -41,7 +44,7 @@ function loadFromFile(filePath: string): { jid: string; botNumber: number }[] {
   return [];
 }
 
-function loadFromEnv(): { jid: string; botNumber: number }[] {
+function loadFromEnv(): { jid: string; botNumber: number; level: number }[] {
   const env = process.env.ALLOWED_GROUPS || "";
   return env
     .split(",")
@@ -51,16 +54,21 @@ function loadFromEnv(): { jid: string; botNumber: number }[] {
       const parts = entry.split(" ");
       const jid = parts[0];
       const botNumber = parseInt(parts[1] || "0", 10);
-      return { jid, botNumber: isNaN(botNumber) ? 0 : botNumber };
+      const level = parseInt(parts[2] || "1", 10);
+      return {
+        jid,
+        botNumber: isNaN(botNumber) ? 0 : botNumber,
+        level: isNaN(level) || level < 1 ? 1 : level,
+      };
     });
 }
 
-function loadStaticEntries(): { jid: string; botNumber: number }[] {
+function loadStaticEntries(): { jid: string; botNumber: number; level: number }[] {
   const envEntries = loadFromEnv();
   const filePath = process.env.ALLOWED_GROUPS_FILE || "allowed-groups.json";
   const fileEntries = filePath ? loadFromFile(filePath) : [];
 
-  const map = new Map<string, { jid: string; botNumber: number }>();
+  const map = new Map<string, { jid: string; botNumber: number; level: number }>();
   for (const item of [...fileEntries, ...envEntries]) {
     if (item.jid) map.set(item.jid, item);
   }
@@ -75,6 +83,7 @@ function ensureLoaded(): void {
     id: 99000 + idx,
     jid: e.jid,
     botNumber: e.botNumber,
+    level: e.level ?? 1,
     enabled: true,
   }));
 }
@@ -88,6 +97,7 @@ function saveToFile(entries: GroupEntry[]): void {
     const data = entries.map((e) => ({
       jid: e.jid,
       botNumber: e.botNumber,
+      level: e.level ?? 1,
       enabled: e.enabled,
     }));
     fs.writeFileSync(absolutePath, JSON.stringify(data, null, 2), "utf8");
@@ -108,7 +118,7 @@ async function init(): Promise<void> {
     for (const ent of staticEntries) {
       const exists = currentDb.some((dbE) => dbE.jid === ent.jid);
       if (!exists) {
-        await addAllowedGroup(ent.jid, ent.botNumber);
+        await addAllowedGroup(ent.jid, ent.botNumber, ent.level);
       }
     }
 
@@ -117,6 +127,7 @@ async function init(): Promise<void> {
       id: e.id,
       jid: e.jid,
       botNumber: e.bot_number,
+      level: e.level ?? 1,
       enabled: e.enabled,
     }));
   } catch (error) {
@@ -125,6 +136,7 @@ async function init(): Promise<void> {
       id: 99000 + idx,
       jid: e.jid,
       botNumber: e.botNumber,
+      level: e.level ?? 1,
       enabled: true,
     }));
   }
@@ -137,7 +149,7 @@ async function init(): Promise<void> {
 
 function getGroupBot(
   jid: string | null | undefined,
-): { botNumber: number } | null {
+): { botNumber: number; level: number } | null {
   if (!jid || !jid.endsWith("@g.us")) return null;
 
   ensureLoaded();
@@ -145,7 +157,7 @@ function getGroupBot(
   if (allowedGroups!.length === 0) return null;
 
   const entry = allowedGroups!.find((g) => g.jid === jid);
-  return entry && entry.enabled ? { botNumber: entry.botNumber } : null;
+  return entry && entry.enabled ? { botNumber: entry.botNumber, level: entry.level ?? 1 } : null;
 }
 
 function isGroupAllowed(jid: string | null | undefined): boolean {
@@ -158,6 +170,7 @@ function listGroups(): GroupEntry[] {
     id: g.id,
     jid: g.jid,
     botNumber: g.botNumber,
+    level: g.level ?? 1,
     enabled: g.enabled,
   }));
 }
@@ -175,6 +188,7 @@ function getGroupEntryByJid(jid: string): GroupEntry | null {
 async function addGroup(
   jid: string | null | undefined,
   botNumber: number = 0,
+  level: number = 1,
 ): Promise<boolean> {
   if (!jid || !jid.endsWith("@g.us")) return false;
 
@@ -182,7 +196,7 @@ async function addGroup(
 
   try {
     const { addAllowedGroup } = await import("../storage/core/allowlistRepository");
-    const ok = await addAllowedGroup(jid, botNumber);
+    const ok = await addAllowedGroup(jid, botNumber, level);
     if (ok) {
       await init();
       saveToFile(allowedGroups!);
@@ -195,12 +209,14 @@ async function addGroup(
   const existing = allowedGroups!.find((g) => g.jid === jid);
   if (existing) {
     existing.botNumber = botNumber;
+    existing.level = level;
     existing.enabled = true;
   } else {
     allowedGroups!.push({
       id: 99000 + allowedGroups!.length,
       jid,
       botNumber,
+      level,
       enabled: true,
     });
   }
@@ -235,15 +251,17 @@ async function removeGroupById(id: number): Promise<boolean> {
   return false;
 }
 
-async function editGroupBot(id: number, botNumber: number): Promise<boolean> {
+async function editGroupBot(id: number, botNumber: number, level?: number): Promise<boolean> {
   ensureLoaded();
 
   const entry = allowedGroups!.find((g) => g.id === id);
   if (!entry) return false;
 
+  const targetLevel = level !== undefined ? level : (entry.level ?? 1);
+
   try {
     const { setGroupBotNumber } = await import("../storage/core/allowlistRepository");
-    const ok = await setGroupBotNumber(id, botNumber);
+    const ok = await setGroupBotNumber(id, botNumber, targetLevel);
     if (ok) {
       await init();
       saveToFile(allowedGroups!);
@@ -254,9 +272,11 @@ async function editGroupBot(id: number, botNumber: number): Promise<boolean> {
   }
 
   entry.botNumber = botNumber;
+  entry.level = targetLevel;
   saveToFile(allowedGroups!);
   return true;
 }
+
 
 async function setGroupEnabled(id: number, enabled: boolean): Promise<boolean> {
   ensureLoaded();

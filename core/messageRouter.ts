@@ -403,6 +403,7 @@ async function processInboundMessage(
         const ok = await groupConfig.editGroupBot(
           pending.id,
           pending.botNumber,
+          pending.level,
         );
         if (ok) {
           const { logAction } = await import("../storage/core/auditRepository");
@@ -411,7 +412,7 @@ async function processInboundMessage(
             "edit_group",
             String(pending.id),
             pending.jid,
-            JSON.stringify({ botNumber: pending.botNumber }),
+            JSON.stringify({ botNumber: pending.botNumber, level: pending.level }),
           );
           const groupName = await safeGetGroupName(sock, pending.jid);
           // Clear sessions for the reassigned group (Task 3.5)
@@ -430,7 +431,7 @@ async function processInboundMessage(
           await sendBotReply(
             sock,
             from || "",
-            `Changed Group ID: ${pending.id} | Name: ${groupName} to use Bot ${pending.botNumber}.`,
+            `Changed Group ID: ${pending.id} | Name: ${groupName} to use Bot ${pending.botNumber}${pending.level ? ` [Level ${pending.level}]` : ""}.`,
           );
         } else {
           await sendBotReply(
@@ -456,7 +457,7 @@ async function processInboundMessage(
 
       const isYes = /^!?yes$/i.test(text!.trim());
       if (isYes) {
-        const ok = await chatConfig.editChatBot(pending.id, pending.botNumber);
+        const ok = await chatConfig.editChatBot(pending.id, pending.botNumber, pending.level);
         if (ok) {
           const { logAction } = await import("../storage/core/auditRepository");
           await logAction(
@@ -464,7 +465,7 @@ async function processInboundMessage(
             "edit_chat",
             String(pending.id),
             pending.jid,
-            JSON.stringify({ botNumber: pending.botNumber }),
+            JSON.stringify({ botNumber: pending.botNumber, level: pending.level }),
           );
           const name = await safeGetContactName(pending.jid);
           // Clear sessions for the reassigned chat (Task 3.5)
@@ -483,7 +484,7 @@ async function processInboundMessage(
           await sendBotReply(
             sock,
             from || "",
-            `Changed Chat ID: ${pending.id} | Name: ${name} to use Bot ${pending.botNumber}.`,
+            `Changed Chat ID: ${pending.id} | Name: ${name} to use Bot ${pending.botNumber}${pending.level ? ` [Level ${pending.level}]` : ""}.`,
           );
         } else {
           await sendBotReply(
@@ -503,14 +504,17 @@ async function processInboundMessage(
       return;
     }
 
-    // Determine bot number for this group/chat
+    // Determine bot number and capability level for this group/chat
     let botNumber = 0;
+    let botLevel = 1;
     if (from?.endsWith("@g.us")) {
       const groupBot = groupConfig.getGroupBot(from);
       botNumber = groupBot?.botNumber || 0;
+      botLevel = groupBot?.level || 1;
     } else {
       const chatBot = chatConfig.getChatBot(from);
       botNumber = chatBot?.botNumber || 0;
+      botLevel = chatBot?.level || 1;
     }
 
     logStructured({
@@ -687,6 +691,7 @@ async function processInboundMessage(
           from: from || "",
           sock,
           msg,
+          level: botLevel,
         },
         botNumber,
       );

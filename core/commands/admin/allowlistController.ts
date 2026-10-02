@@ -19,7 +19,7 @@ registerCommand({
       const formattedPromises = list.map(async (entry) => {
         const statusLabel = entry.enabled ? "Enabled" : "Disabled";
         const groupName = await safeGetGroupName(ctx.sock, entry.jid);
-        return `${entry.id}. ${groupName} (${entry.jid}) | Bot ${entry.botNumber} (${botLabel(entry.botNumber)}) | [${statusLabel}]`;
+        return `${entry.id}. ${groupName} (${entry.jid}) | Bot ${entry.botNumber} (${botLabel(entry.botNumber)}) [Lvl ${entry.level || 1}] | [${statusLabel}]`;
       });
       const formatted = await Promise.all(formattedPromises);
       await sendBotReply(ctx.sock, ctx.from, `Allowed groups:\n${formatted.join("\n")}`);
@@ -39,7 +39,7 @@ registerCommand({
       const formattedPromises = list.map(async (entry) => {
         const statusLabel = entry.enabled ? "Enabled" : "Disabled";
         const name = await safeGetContactName(entry.jid);
-        return `${entry.id}. ${name} (${entry.jid}) | Bot ${entry.botNumber} (${botLabel(entry.botNumber)}) | [${statusLabel}]`;
+        return `${entry.id}. ${name} (${entry.jid}) | Bot ${entry.botNumber} (${botLabel(entry.botNumber)}) [Lvl ${entry.level || 1}] | [${statusLabel}]`;
       });
       const formatted = await Promise.all(formattedPromises);
       await sendBotReply(ctx.sock, ctx.from, `Allowed chats:\n${formatted.join("\n")}`);
@@ -50,7 +50,7 @@ registerCommand({
 // Resolves which allowlisted group/chat a command targets: an explicit
 // -gid/-cid id, else the current chat/group the command was sent in.
 type ResolvedTarget =
-  | { ok: true; type: "group" | "chat"; entry: { id: number; jid: string; botNumber: number } }
+  | { ok: true; type: "group" | "chat"; entry: { id: number; jid: string; botNumber: number; level: number } }
   | { ok: false; msg: string };
 
 function resolveTarget(ctx: any): ResolvedTarget {
@@ -85,9 +85,9 @@ function resolveTarget(ctx: any): ResolvedTarget {
     : { ok: false, msg: "This chat isn't in the allowlist. Add it with !add, or target one with -cid <id>." };
 }
 
-// ── ADD (!add [-g|-c] [jid] [-bid <0-3>]) ──
-// Omit -g/-c and the jid to add THIS chat/group. Default Bot 1 when no -bid.
-// Examples: !add · !add -bid 2 · !add -g 12036...@g.us -bid 2
+// ── ADD (!add [-g|-c] [jid] [-bid <0-3>] [-lvl <1|2>]) ──
+// Omit -g/-c and the jid to add THIS chat/group. Default Bot 1, Level 1 when not specified.
+// Examples: !add · !add -bid 2 · !add -bid 2 -lvl 2 · !add -g 12036...@g.us -bid 2 -lvl 2
 registerCommand({
   name: "add",
   requiresAdmin: true,
@@ -102,6 +102,19 @@ registerCommand({
       toks.splice(bi, 2);
     }
     if (isNaN(botNumber) || botNumber < 0 || botNumber > 3) botNumber = 1;
+
+    // -lvl <n> (optional; default Level 1).
+    let level = 1;
+    const li = toks.findIndex((t) => t.toLowerCase() === "-lvl");
+    if (li !== -1) {
+      const parsedLvl = parseInt(toks[li + 1] || "", 10);
+      if (isNaN(parsedLvl) || parsedLvl < 1 || parsedLvl > 2) {
+        await sendBotReply(ctx.sock, ctx.from, "Invalid level. Usage: -lvl <1|2> (1=Standard Community, 2=Live Intelligence).");
+        return;
+      }
+      level = parsedLvl;
+      toks.splice(li, 2);
+    }
 
     const wantGroup = toks.some((t) => t.toLowerCase() === "-g");
     const wantChat = toks.some((t) => t.toLowerCase() === "-c");
@@ -134,26 +147,26 @@ registerCommand({
     const logAdd = async (id: number | null) => {
       try {
         const { logAction } = await import("../../../storage/core/auditRepository");
-        await logAction(ctx.senderId || "unknown", `add_${type}`, id != null ? String(id) : null, jid, JSON.stringify({ botNumber }));
+        await logAction(ctx.senderId || "unknown", `add_${type}`, id != null ? String(id) : null, jid, JSON.stringify({ botNumber, level }));
       } catch {}
     };
 
     if (type === "group") {
-      const ok = await groupConfig.addGroup(jid, botNumber);
+      const ok = await groupConfig.addGroup(jid, botNumber, level);
       if (!ok) { await sendBotReply(ctx.sock, ctx.from, `Failed to add ${jid}.`); return; }
       const entry = groupConfig.getGroupEntryByJid(jid);
       await logAdd(entry ? entry.id : null);
       const name = await safeGetGroupName(ctx.sock, jid);
-      await sendBotReply(ctx.sock, ctx.from, `Added group ${name} (${jid})${entry ? ` (ID: ${entry.id})` : ""} | Bot ${botNumber} (${botLabel(botNumber)}).`);
+      await sendBotReply(ctx.sock, ctx.from, `Added group ${name} (${jid})${entry ? ` (ID: ${entry.id})` : ""} | Bot ${botNumber} (${botLabel(botNumber)}) [Level ${level}].`);
       return;
     }
 
-    const ok = await chatConfig.addChat(jid, botNumber);
+    const ok = await chatConfig.addChat(jid, botNumber, level);
     if (!ok) { await sendBotReply(ctx.sock, ctx.from, `Failed to add ${jid}.`); return; }
     const entry = chatConfig.getChatEntryByJid(jid);
     await logAdd(entry ? entry.id : null);
     const name = await safeGetContactName(jid);
-    await sendBotReply(ctx.sock, ctx.from, `Added chat ${name} (${jid})${entry ? ` (ID: ${entry.id})` : ""} | Bot ${botNumber} (${botLabel(botNumber)}).`);
+    await sendBotReply(ctx.sock, ctx.from, `Added chat ${name} (${jid})${entry ? ` (ID: ${entry.id})` : ""} | Bot ${botNumber} (${botLabel(botNumber)}) [Level ${level}].`);
   },
 });
 
@@ -193,43 +206,66 @@ registerCommand({
   },
 });
 
-// ── EDIT (!edit -bid <n> — this chat/group, or -gid/-cid <id> -bid <n>) ──
-// Reassigns the bot for an allowlisted group/chat (confirm via !YES).
+// ── EDIT (!edit [-bid <n>] [-lvl <n>] — this chat/group, or -gid/-cid <id> [-bid <n>] [-lvl <n>]) ──
+// Reassigns the bot or level for an allowlisted group/chat (confirm via !YES).
 registerCommand({
   name: "edit",
   requiresAdmin: true,
   handler: async (ctx) => {
     const b = ctx.cmdArgs.join(" ").match(/-bid\s+(\d+)/i);
-    if (!b) {
+    const l = ctx.cmdArgs.join(" ").match(/-lvl\s+(\d+)/i);
+    if (!b && !l) {
       await sendBotReply(
         ctx.sock,
         ctx.from,
-        "Usage: !edit -bid <0-3> (in the chat/group) | !edit -gid <id> -bid <n> | !edit -cid <id> -bid <n>",
+        "Usage: !edit [-bid <0-3>] [-lvl <1|2>] (in chat/group) | !edit -gid <id> [-bid <n>] [-lvl <n>] | !edit -cid <id> [-bid <n>] [-lvl <n>]",
       );
       return;
     }
-    const newBot = parseInt(b[1], 10);
     const t = resolveTarget(ctx);
     if (!t.ok) {
       await sendBotReply(ctx.sock, ctx.from, t.msg);
       return;
     }
     const label = t.type === "group" ? "Group" : "Chat";
-    if (t.entry.botNumber === newBot) {
-      await sendBotReply(ctx.sock, ctx.from, `${label} is already using bot ${newBot}.`);
+    const currentBot = t.entry.botNumber;
+    const currentLevel = t.entry.level ?? 1;
+
+    let newBot = currentBot;
+    if (b) {
+      const parsedBot = parseInt(b[1], 10);
+      if (isNaN(parsedBot) || parsedBot < 0 || parsedBot > 3) {
+        await sendBotReply(ctx.sock, ctx.from, "Invalid bot ID. Available: 0, 1, 2, 3.");
+        return;
+      }
+      newBot = parsedBot;
+    }
+
+    let newLevel = currentLevel;
+    if (l) {
+      const parsedLvl = parseInt(l[1], 10);
+      if (isNaN(parsedLvl) || parsedLvl < 1 || parsedLvl > 2) {
+        await sendBotReply(ctx.sock, ctx.from, "Invalid level. Usage: -lvl <1|2> (1=Standard Community, 2=Live Intelligence).");
+        return;
+      }
+      newLevel = parsedLvl;
+    }
+
+    if (newBot === currentBot && newLevel === currentLevel) {
+      await sendBotReply(ctx.sock, ctx.from, `${label} is already using Bot ${newBot} (${botLabel(newBot)}) [Level ${newLevel}].`);
       return;
     }
-    const { id, jid, botNumber } = t.entry;
+    const { id, jid } = t.entry;
     const name = t.type === "group" ? await safeGetGroupName(ctx.sock, jid) : await safeGetContactName(jid);
     if (t.type === "group") {
-      ctx.session.pendingEditGroup = { id, jid, botNumber: newBot };
+      ctx.session.pendingEditGroup = { id, jid, botNumber: newBot, level: newLevel };
     } else {
-      ctx.session.pendingEditChat = { id, jid, botNumber: newBot };
+      ctx.session.pendingEditChat = { id, jid, botNumber: newBot, level: newLevel };
     }
     await sendBotReply(
       ctx.sock,
       ctx.from,
-      `Change ${label} ID: ${id} | Name: ${name} | JID: ${jid} to Bot ${newBot} (${botLabel(newBot)}) from Bot ${botNumber} (${botLabel(botNumber)})?\n(Enter !YES to confirm)`,
+      `Change ${label} ID: ${id} | Name: ${name} | JID: ${jid} to Bot ${newBot} (${botLabel(newBot)}) [Level ${newLevel}] from Bot ${currentBot} (${botLabel(currentBot)}) [Level ${currentLevel}]?\n(Enter !YES to confirm)`,
     );
     await saveSession(buildSessionKey(ctx.from, ctx.senderId), ctx.session);
   },

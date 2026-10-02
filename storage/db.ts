@@ -264,6 +264,7 @@ export async function ensureSchema(): Promise<void> {
         id SERIAL PRIMARY KEY,
         jid TEXT UNIQUE NOT NULL,
         bot_number INTEGER NOT NULL DEFAULT 0,
+        level INTEGER NOT NULL DEFAULT 1,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
@@ -272,9 +273,13 @@ export async function ensureSchema(): Promise<void> {
         id SERIAL PRIMARY KEY,
         jid TEXT UNIQUE NOT NULL,
         bot_number INTEGER NOT NULL DEFAULT 0,
+        level INTEGER NOT NULL DEFAULT 1,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      ALTER TABLE wa_allowed_groups ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE wa_allowed_chats ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1;
 
       CREATE TABLE IF NOT EXISTS wa_daily_user_usage (
         jid TEXT NOT NULL,

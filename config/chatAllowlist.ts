@@ -5,6 +5,7 @@ interface ChatEntry {
   id: number;
   jid: string;
   botNumber: number;
+  level: number;
   enabled: boolean;
 }
 
@@ -17,7 +18,7 @@ function normalizeChatJid(
   return jid;
 }
 
-function loadFromFile(filePath: string): { jid: string; botNumber: number }[] {
+function loadFromFile(filePath: string): { jid: string; botNumber: number; level: number }[] {
   try {
     const absolutePath = path.isAbsolute(filePath)
       ? filePath
@@ -29,18 +30,20 @@ function loadFromFile(filePath: string): { jid: string; botNumber: number }[] {
       return parsed
         .map((entry) => {
           if (typeof entry === "string") {
-            return { jid: entry.trim(), botNumber: 0 };
+            return { jid: entry.trim(), botNumber: 0, level: 1 };
           }
           if (entry && typeof entry === "object" && entry.jid) {
             const botNum = parseInt(entry.botNumber ?? entry.bot_number ?? "0", 10);
+            const lvl = parseInt(entry.level ?? "1", 10);
             return {
               jid: String(entry.jid).trim(),
               botNumber: isNaN(botNum) ? 0 : botNum,
+              level: isNaN(lvl) || lvl < 1 ? 1 : lvl,
             };
           }
           return null;
         })
-        .filter((e): e is { jid: string; botNumber: number } => Boolean(e && e.jid));
+        .filter((e): e is { jid: string; botNumber: number; level: number } => Boolean(e && e.jid));
     }
   } catch (error) {
     console.warn(`⚠️ Failed to parse allowed chats file ${filePath}:`, error);
@@ -48,7 +51,7 @@ function loadFromFile(filePath: string): { jid: string; botNumber: number }[] {
   return [];
 }
 
-function loadFromEnv(): { jid: string; botNumber: number }[] {
+function loadFromEnv(): { jid: string; botNumber: number; level: number }[] {
   const env = process.env.ALLOWED_CHATS || "";
   return env
     .split(",")
@@ -58,19 +61,21 @@ function loadFromEnv(): { jid: string; botNumber: number }[] {
       const parts = entry.split(" ");
       const jid = parts[0];
       const botNumber = parseInt(parts[1] || "0", 10);
+      const level = parseInt(parts[2] || "1", 10);
       return {
         jid: normalizeChatJid(jid) || jid,
         botNumber: isNaN(botNumber) ? 0 : botNumber,
+        level: isNaN(level) || level < 1 ? 1 : level,
       };
     });
 }
 
-function loadStaticEntries(): { jid: string; botNumber: number }[] {
+function loadStaticEntries(): { jid: string; botNumber: number; level: number }[] {
   const envEntries = loadFromEnv();
   const filePath = process.env.ALLOWED_CHATS_FILE || "allowed-chats.json";
   const fileEntries = filePath ? loadFromFile(filePath) : [];
 
-  const map = new Map<string, { jid: string; botNumber: number }>();
+  const map = new Map<string, { jid: string; botNumber: number; level: number }>();
   for (const item of [...fileEntries, ...envEntries]) {
     if (item.jid) map.set(item.jid, item);
   }
@@ -85,6 +90,7 @@ function ensureLoaded(): void {
     id: 99000 + idx,
     jid: e.jid,
     botNumber: e.botNumber,
+    level: e.level ?? 1,
     enabled: true,
   }));
 }
@@ -98,6 +104,7 @@ function saveToFile(entries: ChatEntry[]): void {
     const data = entries.map((e) => ({
       jid: e.jid,
       botNumber: e.botNumber,
+      level: e.level ?? 1,
       enabled: e.enabled,
     }));
     fs.writeFileSync(absolutePath, JSON.stringify(data, null, 2), "utf8");
@@ -118,7 +125,7 @@ async function init(): Promise<void> {
     for (const ent of staticEntries) {
       const exists = currentDb.some((dbE) => dbE.jid === ent.jid);
       if (!exists) {
-        await addAllowedChat(ent.jid, ent.botNumber);
+        await addAllowedChat(ent.jid, ent.botNumber, ent.level);
       }
     }
 
@@ -127,6 +134,7 @@ async function init(): Promise<void> {
       id: e.id,
       jid: e.jid,
       botNumber: e.bot_number,
+      level: e.level ?? 1,
       enabled: e.enabled,
     }));
   } catch (error) {
@@ -135,6 +143,7 @@ async function init(): Promise<void> {
       id: 99000 + idx,
       jid: e.jid,
       botNumber: e.botNumber,
+      level: e.level ?? 1,
       enabled: true,
     }));
   }
@@ -147,7 +156,7 @@ async function init(): Promise<void> {
 
 function getChatBot(
   jid: string | null | undefined,
-): { botNumber: number } | null {
+): { botNumber: number; level: number } | null {
   if (!jid) return null;
 
   ensureLoaded();
@@ -170,7 +179,7 @@ function getChatBot(
     );
   });
 
-  return entry && entry.enabled ? { botNumber: entry.botNumber } : null;
+  return entry && entry.enabled ? { botNumber: entry.botNumber, level: entry.level ?? 1 } : null;
 }
 
 function isChatAllowed(jid: string | null | undefined): boolean {
@@ -183,6 +192,7 @@ function listChats(): ChatEntry[] {
     id: c.id,
     jid: c.jid,
     botNumber: c.botNumber,
+    level: c.level ?? 1,
     enabled: c.enabled,
   }));
 }
@@ -200,6 +210,7 @@ function getChatEntryByJid(jid: string): ChatEntry | null {
 async function addChat(
   jid: string | null | undefined,
   botNumber: number = 0,
+  level: number = 1,
 ): Promise<boolean> {
   if (!jid) return false;
 
@@ -209,7 +220,7 @@ async function addChat(
 
   try {
     const { addAllowedChat } = await import("../storage/core/allowlistRepository");
-    const ok = await addAllowedChat(normalized, botNumber);
+    const ok = await addAllowedChat(normalized, botNumber, level);
     if (ok) {
       await init();
       saveToFile(allowedChats!);
@@ -226,12 +237,14 @@ async function addChat(
 
   if (existing) {
     existing.botNumber = botNumber;
+    existing.level = level;
     existing.enabled = true;
   } else {
     allowedChats!.push({
       id: 99000 + allowedChats!.length,
       jid: normalized,
       botNumber,
+      level,
       enabled: true,
     });
   }
@@ -266,15 +279,17 @@ async function removeChatById(id: number): Promise<boolean> {
   return false;
 }
 
-async function editChatBot(id: number, botNumber: number): Promise<boolean> {
+async function editChatBot(id: number, botNumber: number, level?: number): Promise<boolean> {
   ensureLoaded();
 
   const entry = allowedChats!.find((c) => c.id === id);
   if (!entry) return false;
 
+  const targetLevel = level !== undefined ? level : (entry.level ?? 1);
+
   try {
     const { setChatBotNumber } = await import("../storage/core/allowlistRepository");
-    const ok = await setChatBotNumber(id, botNumber);
+    const ok = await setChatBotNumber(id, botNumber, targetLevel);
     if (ok) {
       await init();
       saveToFile(allowedChats!);
@@ -285,9 +300,11 @@ async function editChatBot(id: number, botNumber: number): Promise<boolean> {
   }
 
   entry.botNumber = botNumber;
+  entry.level = targetLevel;
   saveToFile(allowedChats!);
   return true;
 }
+
 
 async function setChatEnabled(id: number, enabled: boolean): Promise<boolean> {
   ensureLoaded();

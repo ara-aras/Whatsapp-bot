@@ -76,6 +76,7 @@ export async function handleMessage(
   groqModel: string,
   isAdmin: boolean = false,
   senderJid?: string,
+  level: number = 1,
 ): Promise<AgentResult> {
   const trimmed = (userPrompt || "").trim();
   const lowerPrompt = trimmed.toLowerCase();
@@ -111,9 +112,10 @@ export async function handleMessage(
   if (mentorResult) return mentorResult;
 
   // 5. AI FALLBACK
+  const isLevel2 = level >= 2;
   const isCommunity = isCommunityQuery(userPrompt);
 
-  if (!isCommunity && !session.domainUnlocked && !isAdmin) {
+  if (!isLevel2 && !isCommunity && !session.domainUnlocked && !isAdmin) {
     return {
       reply: formatBotReply(
         [
@@ -127,12 +129,28 @@ export async function handleMessage(
     };
   }
 
+  // 6. Live Search & News Context for Level 2
+  let liveSearchContext: string | null = null;
+  if (isLevel2) {
+    try {
+      const { classifySearchIntent } = await import("../../services/search/searchIntentClassifier");
+      const intent = classifySearchIntent(userPrompt);
+      if (intent.needsSearch) {
+        const { getLiveSearchContext } = await import("../../services/search/liveSearchService");
+        liveSearchContext = await getLiveSearchContext(intent.cleanQuery);
+      }
+    } catch (searchErr) {
+      console.warn("[DKB] Live search error:", searchErr);
+    }
+  }
+
   try {
     const aiReply = await getGroqReply(
       session.messages,
       groqApiKey,
       groqModel,
       userPrompt,
+      liveSearchContext,
     );
     return { reply: formatBotReply(aiReply), usedAI: true };
   } catch (err) {
