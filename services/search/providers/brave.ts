@@ -8,6 +8,7 @@ import type { SearchResponse, SearchResult } from "../searchService";
  */
 export interface BraveOptions {
   count?: number;
+  days?: number;
 }
 
 export function isBraveConfigured(): boolean {
@@ -23,7 +24,12 @@ export async function searchWithBrave(
 
   try {
     const count = opts.count ?? 5;
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
+    let freshnessParam = "";
+    if (opts.days && opts.days > 0) {
+      const freshness = opts.days <= 1 ? "pd" : opts.days <= 7 ? "pw" : "pm";
+      freshnessParam = `&freshness=${freshness}`;
+    }
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}${freshnessParam}`;
     const fetchFn = (globalThis as any).fetch ?? (await import("node-fetch")).default;
 
     const res = await fetchFn(url, {
@@ -50,6 +56,7 @@ export async function searchWithBrave(
             title: String(item.title).trim(),
             url: String(item.url || ""),
             content: String(item.description || item.snippet || "").trim(),
+            publishedDate: item.page_age || item.age || undefined,
           });
         }
       }

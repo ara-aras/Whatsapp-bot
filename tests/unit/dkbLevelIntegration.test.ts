@@ -56,4 +56,37 @@ describe("dkbLevelIntegration", () => {
     expect(result.usedAI).toBe(true);
     expect(result.reply).toContain("Mocked AI response with live intelligence");
   });
+
+  it("Level 2 DKB invokes agenticAnswer when agentic search is available", async () => {
+    const session = { ...mockSession, domainUnlocked: false };
+    const agenticModule = await import("../../services/search/agenticSearch");
+    const isAvailSpy = vi.spyOn(agenticModule, "isAgenticAvailable").mockReturnValue(true);
+    const answerSpy = vi.spyOn(agenticModule, "agenticAnswer").mockResolvedValue({
+      answer: "Gemini 4 Argon announced 30 Sept 2026",
+      usedTools: ["web_search"],
+      citations: ["https://reuters.com"],
+    });
+
+    const result = await handleMessage(
+      session,
+      "What is the latest AI model from Google 2026?",
+      "mock_key",
+      "mock_model",
+      false,
+      "user@s.whatsapp.net",
+      2,
+    );
+
+    expect(answerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "What is the latest AI model from Google 2026?",
+        baseSystemPrompt: expect.stringContaining("Current Date & Time (IST):"),
+      }),
+    );
+    expect(result.reply).toContain("Gemini 4 Argon announced 30 Sept 2026");
+    expect(result.usedAI).toBe(true);
+
+    isAvailSpy.mockRestore();
+    answerSpy.mockRestore();
+  });
 });

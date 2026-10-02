@@ -88,7 +88,8 @@ export function isAgenticAvailable(): boolean {
   return !!(
     process.env.TAVILY_API_KEY ||
     process.env.FIRECRAWL_API_KEY ||
-    process.env.EXA_API_KEY
+    process.env.EXA_API_KEY ||
+    process.env.BRAVE_API_KEY
   );
 }
 

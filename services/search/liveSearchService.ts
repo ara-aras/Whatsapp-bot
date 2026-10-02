@@ -16,6 +16,7 @@ export interface SearchResultItem {
   title: string;
   url: string;
   snippet: string;
+  publishedDate?: string;
 }
 
 const SEARCH_TIMEOUT_MS = Number(process.env.SEARCH_TIMEOUT_MS) || 5000;
@@ -28,24 +29,31 @@ async function searchTavily(
   query: string,
   apiKey: string,
   fetchFn: typeof fetch,
+  isRecencySensitive: boolean = false,
 ): Promise<SearchResultItem[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
 
   try {
+    const body: Record<string, any> = {
+      api_key: apiKey,
+      query,
+      search_depth: "advanced",
+      max_results: 5,
+      include_answer: true,
+    };
+    if (isRecencySensitive) {
+      body.topic = "news";
+      body.days = 4;
+    }
+
     const res = await fetchFn("https://api.tavily.com/search", {
       method: "POST",
       signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query,
-        search_depth: "basic",
-        max_results: 3,
-        include_answer: true,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!res.ok) {
@@ -64,12 +72,13 @@ async function searchTavily(
     }
 
     if (Array.isArray(data?.results)) {
-      for (const item of data.results.slice(0, 3)) {
-        if (item?.title && item?.content) {
+      for (const item of data.results.slice(0, 5)) {
+        if (item?.title && (item?.content || item?.snippet)) {
           results.push({
             title: String(item.title).trim(),
             url: String(item.url || ""),
-            snippet: String(item.content).slice(0, 280).trim(),
+            snippet: String(item.content || item.snippet).slice(0, 300).trim(),
+            publishedDate: item.published_date || undefined,
           });
         }
       }
@@ -89,12 +98,14 @@ async function searchBrave(
   query: string,
   apiKey: string,
   fetchFn: typeof fetch,
+  isRecencySensitive: boolean = false,
 ): Promise<SearchResultItem[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
 
   try {
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=3`;
+    const freshnessParam = isRecencySensitive ? "&freshness=pw" : "";
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5${freshnessParam}`;
     const res = await fetchFn(url, {
       method: "GET",
       signal: controller.signal,
@@ -113,12 +124,13 @@ async function searchBrave(
     const results: SearchResultItem[] = [];
 
     if (Array.isArray(data?.web?.results)) {
-      for (const item of data.web.results.slice(0, 3)) {
+      for (const item of data.web.results.slice(0, 5)) {
         if (item?.title && (item?.description || item?.snippet)) {
           results.push({
             title: String(item.title).trim(),
             url: String(item.url || ""),
-            snippet: String(item.description || item.snippet || "").slice(0, 280).trim(),
+            snippet: String(item.description || item.snippet || "").slice(0, 300).trim(),
+            publishedDate: item.page_age || item.age || undefined,
           });
         }
       }
@@ -215,6 +227,9 @@ export function formatSearchContext(query: string, items: SearchResultItem[]): s
 
   items.forEach((item, idx) => {
     lines.push(`${idx + 1}. ${item.title}`);
+    if (item.publishedDate) {
+      lines.push(`   Published: ${item.publishedDate}`);
+    }
     if (item.url && item.url.startsWith("http")) {
       lines.push(`   Source: ${item.url}`);
     }
@@ -244,8 +259,11 @@ export async function getLiveSearchContext(
     .digest("hex");
   const cacheKey = `search_cache:${queryHash}`;
 
-  // 1. Try Redis cache
-  if (!skipCache) {
+  const { RECENCY_SENSITIVE_PATTERNS } = await import("./searchService");
+  const isRecencySensitive = RECENCY_SENSITIVE_PATTERNS.some((p) => p.test(trimmed));
+
+  // 1. Try Redis cache (skip for recency-sensitive queries to stay up-to-the-minute fresh)
+  if (!skipCache && !isRecencySensitive) {
     try {
       const { redis } = await import("../../storage/redisClient");
       const cached = await redis.get(cacheKey);
@@ -259,27 +277,59 @@ export async function getLiveSearchContext(
 
   let items: SearchResultItem[] = [];
 
-  // 2. Try Tavily Search API if key is present
-  const tavilyKey = process.env.TAVILY_API_KEY;
-  if (tavilyKey) {
+  // When running with native fetch, leverage the multi-provider fan-out (Tavily, Brave, Exa, Firecrawl)
+  const isDefaultFetch = fetchFn === (globalThis as any).fetch;
+  const hasProviderKey = !!(
+    process.env.TAVILY_API_KEY ||
+    process.env.BRAVE_API_KEY ||
+    process.env.EXA_API_KEY ||
+    process.env.FIRECRAWL_API_KEY
+  );
+
+  if (isDefaultFetch && hasProviderKey) {
     try {
-      items = await searchTavily(trimmed, tavilyKey, fetchFn);
+      const { searchWeb: searchWebService } = await import("./searchService");
+      const resp = await searchWebService(trimmed);
+      if (resp?.results?.length) {
+        items = resp.results.slice(0, 5).map((r) => ({
+          title: r.title,
+          url: r.url,
+          snippet: r.content.slice(0, 300),
+          publishedDate: r.publishedDate,
+        }));
+      }
     } catch (err) {
       console.warn(
-        `[LiveSearch] Tavily failed (${err instanceof Error ? err.message : String(err)}), falling back...`,
+        `[LiveSearch] Fan-out search failed (${err instanceof Error ? err.message : String(err)}), falling back...`,
       );
     }
   }
 
+  // 2. Try Tavily Search API directly if no results yet and key is present
+  if (items.length === 0) {
+    const tavilyKey = process.env.TAVILY_API_KEY;
+    if (tavilyKey) {
+      try {
+        items = await searchTavily(trimmed, tavilyKey, fetchFn, isRecencySensitive);
+      } catch (err) {
+        console.warn(
+          `[LiveSearch] Tavily failed (${err instanceof Error ? err.message : String(err)}), falling back...`,
+        );
+      }
+    }
+  }
+
   // 3. Try Brave Search API if no results yet and key is present
-  const braveKey = process.env.BRAVE_API_KEY;
-  if (items.length === 0 && braveKey) {
-    try {
-      items = await searchBrave(trimmed, braveKey, fetchFn);
-    } catch (err) {
-      console.warn(
-        `[LiveSearch] Brave Search failed (${err instanceof Error ? err.message : String(err)}), falling back...`,
-      );
+  if (items.length === 0) {
+    const braveKey = process.env.BRAVE_API_KEY;
+    if (braveKey) {
+      try {
+        items = await searchBrave(trimmed, braveKey, fetchFn, isRecencySensitive);
+      } catch (err) {
+        console.warn(
+          `[LiveSearch] Brave Search failed (${err instanceof Error ? err.message : String(err)}), falling back...`,
+        );
+      }
     }
   }
 
@@ -300,12 +350,14 @@ export async function getLiveSearchContext(
 
   const formatted = formatSearchContext(trimmed, items);
 
-  // 4. Cache formatted context in Redis
-  try {
-    const { redis } = await import("../../storage/redisClient");
-    await redis.setex(cacheKey, CACHE_TTL_SECONDS, formatted);
-  } catch {
-    /* non-fatal */
+  // 5. Cache formatted context in Redis (only for non-recency queries)
+  if (!isRecencySensitive) {
+    try {
+      const { redis } = await import("../../storage/redisClient");
+      await redis.setex(cacheKey, CACHE_TTL_SECONDS, formatted);
+    } catch {
+      /* non-fatal */
+    }
   }
 
   return formatted;

@@ -134,10 +134,45 @@ export async function handleMessage(
   if (isLevel2) {
     try {
       const { classifySearchIntent } = await import("../../services/search/searchIntentClassifier");
+      const { requiresCurrentInfo } = await import("../../services/search/searchService");
       const intent = classifySearchIntent(userPrompt);
-      if (intent.needsSearch) {
+      const needsSearch = intent.needsSearch || requiresCurrentInfo(userPrompt);
+
+      if (needsSearch && groqApiKey) {
+        const { isAgenticAvailable, agenticAnswer } = await import(
+          "../../services/search/agenticSearch"
+        );
+        if (isAgenticAvailable()) {
+          console.info(`[DKB] Level 2 query "${userPrompt}" — running agentic search.`);
+          const { buildDynamicContextPrompt } = await import("../../ai/promptBuilder");
+          const { formatISTDate, WEB_RAG_INSTRUCTIONS } = await import(
+            "../../services/search/contextBuilder"
+          );
+          const { DK24_SYSTEM_PROMPT } = await import("./intro");
+          const dynamicContext = await buildDynamicContextPrompt(userPrompt);
+          const dateHeader = `Current Date & Time (IST): ${formatISTDate()}`;
+          const baseSystemPrompt = `${DK24_SYSTEM_PROMPT}\n\n${dateHeader}\n\n${dynamicContext}\n\n${WEB_RAG_INSTRUCTIONS}`;
+
+          const agenticRes = await agenticAnswer({
+            query: userPrompt,
+            groqApiKey,
+            model: groqModel,
+            baseSystemPrompt,
+            history: session.messages.slice(-6),
+          });
+
+          if (agenticRes?.answer) {
+            console.info(
+              `[DKB] Agentic answer via tools: [${agenticRes.usedTools.join(", ") || "none"}].`,
+            );
+            return { reply: formatBotReply(agenticRes.answer), usedAI: true };
+          }
+        }
+      }
+
+      if (needsSearch) {
         const { getLiveSearchContext } = await import("../../services/search/liveSearchService");
-        liveSearchContext = await getLiveSearchContext(intent.cleanQuery);
+        liveSearchContext = await getLiveSearchContext(intent.cleanQuery || userPrompt);
       }
     } catch (searchErr) {
       console.warn("[DKB] Live search error:", searchErr);
