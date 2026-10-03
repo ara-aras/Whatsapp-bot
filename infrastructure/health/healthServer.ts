@@ -1,5 +1,7 @@
 import http from "http";
 import crypto from "crypto";
+import fs from "fs";
+import * as nodePath from "path";
 import { getBotStatus, isHealthy } from "./botStatus";
 import { renderAdminPage } from "./adminPage";
 import { handleAdminApi } from "./adminApi";
@@ -90,6 +92,24 @@ export function startHealthServer(): void {
     if (adminEnabled && path === "/admin") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       res.end(renderAdminPage());
+      return;
+    }
+
+    if (adminEnabled && path.startsWith("/admin/asset/")) {
+      const safeFile = path.slice("/admin/asset/".length).replace(/[^a-zA-Z0-9_\-\.]/g, "");
+      const assetPath = nodePath.join(process.cwd(), "assets", safeFile);
+      if (fs.existsSync(assetPath)) {
+        const ext = nodePath.extname(assetPath).toLowerCase();
+        const contentType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+        res.writeHead(200, {
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=86400",
+        });
+        fs.createReadStream(assetPath).pipe(res);
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
       return;
     }
 
