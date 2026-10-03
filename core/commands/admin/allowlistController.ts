@@ -8,43 +8,73 @@ import { redis } from "../../../storage/redisClient";
 import { botLabel } from "../../../agents/core/botLabels";
 
 // ── LIST GROUPS ──
+const listGroupsHandler = async (ctx: any) => {
+  const list = groupConfig.listGroups();
+  if (!list || list.length === 0) {
+    await sendBotReply(ctx.sock, ctx.from, "No groups configured (allowlist is empty).");
+  } else {
+    const formattedPromises = list.map(async (entry) => {
+      const statusLabel = entry.enabled ? "Enabled" : "Disabled";
+      const groupName = await safeGetGroupName(ctx.sock, entry.jid);
+      return `${entry.id}. ${groupName} (${entry.jid}) | Bot ${entry.botNumber} (${botLabel(entry.botNumber)}) [Lvl ${entry.level || 1}] | [${statusLabel}]`;
+    });
+    const formatted = await Promise.all(formattedPromises);
+    await sendBotReply(ctx.sock, ctx.from, `Allowed groups:\n${formatted.join("\n")}`);
+  }
+};
+
+// ── LIST CHATS ──
+const listChatsHandler = async (ctx: any) => {
+  const list = chatConfig.listChats();
+  if (!list || list.length === 0) {
+    await sendBotReply(ctx.sock, ctx.from, "No chats configured (allowlist is empty).");
+  } else {
+    const formattedPromises = list.map(async (entry) => {
+      const statusLabel = entry.enabled ? "Enabled" : "Disabled";
+      const name = await safeGetContactName(entry.jid);
+      return `${entry.id}. ${name} (${entry.jid}) | Bot ${entry.botNumber} (${botLabel(entry.botNumber)}) [Lvl ${entry.level || 1}] | [${statusLabel}]`;
+    });
+    const formatted = await Promise.all(formattedPromises);
+    await sendBotReply(ctx.sock, ctx.from, `Allowed chats:\n${formatted.join("\n")}`);
+  }
+};
+
+// ── LIST (!list [-g|-c]) ──
+const listHandler = async (ctx: any) => {
+  const joined = ctx.cmdArgs.join(" ").toLowerCase();
+  const hasGroupFlag = /(?:^|\s)-(?:gid|g)(?:\s+|$)/i.test(joined) || /(?:^|\s)groups?(?:\s+|$)/i.test(joined);
+  const hasChatFlag = /(?:^|\s)-(?:cid|c)(?:\s+|$)/i.test(joined) || /(?:^|\s)chats?(?:\s+|$)/i.test(joined);
+
+  if (hasGroupFlag && !hasChatFlag) {
+    return listGroupsHandler(ctx);
+  }
+  if (hasChatFlag && !hasGroupFlag) {
+    return listChatsHandler(ctx);
+  }
+  // Context-aware fallback: list groups if inside group, chats if in private chat
+  if (ctx.from.endsWith("@g.us")) {
+    return listGroupsHandler(ctx);
+  } else {
+    return listChatsHandler(ctx);
+  }
+};
+
 registerCommand({
   name: "listgroups",
   requiresAdmin: true,
-  handler: async (ctx) => {
-    const list = groupConfig.listGroups();
-    if (!list || list.length === 0) {
-      await sendBotReply(ctx.sock, ctx.from, "No groups configured (allowlist is empty).");
-    } else {
-      const formattedPromises = list.map(async (entry) => {
-        const statusLabel = entry.enabled ? "Enabled" : "Disabled";
-        const groupName = await safeGetGroupName(ctx.sock, entry.jid);
-        return `${entry.id}. ${groupName} (${entry.jid}) | Bot ${entry.botNumber} (${botLabel(entry.botNumber)}) [Lvl ${entry.level || 1}] | [${statusLabel}]`;
-      });
-      const formatted = await Promise.all(formattedPromises);
-      await sendBotReply(ctx.sock, ctx.from, `Allowed groups:\n${formatted.join("\n")}`);
-    }
-  }
+  handler: listGroupsHandler,
 });
 
-// ── LIST CHATS ──
 registerCommand({
   name: "listchats",
   requiresAdmin: true,
-  handler: async (ctx) => {
-    const list = chatConfig.listChats();
-    if (!list || list.length === 0) {
-      await sendBotReply(ctx.sock, ctx.from, "No chats configured (allowlist is empty).");
-    } else {
-      const formattedPromises = list.map(async (entry) => {
-        const statusLabel = entry.enabled ? "Enabled" : "Disabled";
-        const name = await safeGetContactName(entry.jid);
-        return `${entry.id}. ${name} (${entry.jid}) | Bot ${entry.botNumber} (${botLabel(entry.botNumber)}) [Lvl ${entry.level || 1}] | [${statusLabel}]`;
-      });
-      const formatted = await Promise.all(formattedPromises);
-      await sendBotReply(ctx.sock, ctx.from, `Allowed chats:\n${formatted.join("\n")}`);
-    }
-  }
+  handler: listChatsHandler,
+});
+
+registerCommand({
+  name: "list",
+  requiresAdmin: true,
+  handler: listHandler,
 });
 
 // Resolves which allowlisted group/chat a command targets: an explicit
@@ -410,167 +440,209 @@ registerCommand({
 // ── FIND GROUPS ──
 // Lists every group the bot participates in, most-recently-active first.
 // Supports -f <filter> (name/JID) and -p <page>, paginated at the shared size.
+const findGroupsHandler = async (ctx: any) => {
+  try {
+    const rawArgs = ctx.cmdArgs.join(" ").trim();
+    let filter = "";
+    const filterMatch = rawArgs.match(/-f\s+([^\-]+)/i);
+    if (filterMatch) {
+      filter = filterMatch[1].trim().toLowerCase();
+    } else {
+      const cleaned = rawArgs.replace(/-p\s+\d+/i, "").trim();
+      if (cleaned && !cleaned.startsWith("-")) {
+        filter = cleaned.toLowerCase();
+      }
+    }
+    let page = 1;
+    const pageMatch = rawArgs.match(/-p\s+(\d+)/i);
+    if (pageMatch) {
+      page = parseInt(pageMatch[1], 10);
+      if (isNaN(page) || page < 1) page = 1;
+    }
+
+    const groups = await ctx.sock.groupFetchAllParticipating();
+    let list = Object.values(groups) as any[];
+    if (list.length === 0) {
+      await sendBotReply(ctx.sock, ctx.from, "The bot is not currently in any groups.");
+      return;
+    }
+
+    // Sort by most-recent bot interaction (0 = never seen).
+    const withTime = await Promise.all(
+      list.map(async (g: any) => {
+        const t = await redis.get(`last_group_interaction:${g.id}`);
+        return { g, lastTime: t ? parseInt(t, 10) : 0 };
+      }),
+    );
+    withTime.sort((a, b) => b.lastTime - a.lastTime);
+    let sorted = withTime.map((x) => x.g);
+
+    if (filter) {
+      sorted = sorted.filter(
+        (g: any) =>
+          (g.subject || "").toLowerCase().includes(filter) ||
+          String(g.id).toLowerCase().includes(filter),
+      );
+    }
+    if (sorted.length === 0) {
+      await sendBotReply(ctx.sock, ctx.from, `No groups match "${filter}".`);
+      return;
+    }
+
+    const { paginate, PAGINATION_MAX_VIEW } = await import(
+      "../../../services/DKB/pagination"
+    );
+    const { pageItems, page: p, totalPages, total } = paginate(sorted, page);
+    const offset = (p - 1) * PAGINATION_MAX_VIEW;
+    const formatted = pageItems.map(
+      (g: any, idx) => `${offset + idx + 1}. ${g.subject} | JID: ${g.id}`,
+    );
+    const header = filter
+      ? `Groups matching "${filter}" (${total}):`
+      : `Groups the bot is in (${total}, recent first):`;
+    const footer =
+      totalPages > 1
+        ? `\n\nPage ${p}/${totalPages}${p < totalPages ? ` — !find -g ${filter ? `-f "${filter}" ` : ""}-p ${p + 1} for more.` : ""}`
+        : "";
+    await sendBotReply(
+      ctx.sock,
+      ctx.from,
+      `${header}\n${formatted.join("\n")}${footer}`,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await sendBotReply(ctx.sock, ctx.from, `Failed to fetch groups:\n${msg}`);
+  }
+};
+
+// ── FIND CHATS ──
+const findChatsHandler = async (ctx: any) => {
+  try {
+    const rawArgs = ctx.cmdArgs.join(" ").trim();
+    let filter = "";
+    let page = 1;
+
+    // Extract -f filter
+    const filterMatch = rawArgs.match(/-f\s+([^\-]+)/i);
+    if (filterMatch) {
+      filter = filterMatch[1].trim().toLowerCase();
+    } else {
+      const cleaned = rawArgs.replace(/-p\s+\d+/i, "").trim();
+      if (cleaned && !cleaned.startsWith("-")) {
+        filter = cleaned.toLowerCase();
+      }
+    }
+
+    // Extract -p page
+    const pageMatch = rawArgs.match(/-p\s+(\d+)/i);
+    if (pageMatch) {
+      page = parseInt(pageMatch[1], 10);
+      if (isNaN(page) || page < 1) page = 1;
+    }
+
+    const allContacts = await redis.hgetall("contact_names");
+    if (!allContacts || Object.keys(allContacts).length === 0) {
+      await sendBotReply(ctx.sock, ctx.from, "No cached contacts found in the database yet.");
+      return;
+    }
+
+    let entries = Object.entries(allContacts);
+
+    if (filter) {
+      entries = entries.filter(([jid, name]) => {
+        return jid.toLowerCase().includes(filter) || name.toLowerCase().includes(filter);
+      });
+    }
+
+    if (entries.length === 0) {
+      const msg = filter ? `No cached contacts matched your query: "${filter}"` : "No contacts found.";
+      await sendBotReply(ctx.sock, ctx.from, msg);
+      return;
+    }
+
+    const { PAGINATION_MAX_VIEW: PAGE_SIZE } = await import(
+      "../../../services/DKB/pagination"
+    );
+    const totalItems = entries.length;
+    const totalPages = Math.ceil(totalItems / PAGE_SIZE);
+
+    if (page > totalPages) page = totalPages;
+
+    const startIndex = (page - 1) * PAGE_SIZE;
+    const paginatedEntries = entries.slice(startIndex, startIndex + PAGE_SIZE);
+
+    const formatted = paginatedEntries.map(([jid, name], idx) => {
+      return `${startIndex + idx + 1}. ${name} | JID: ${jid}`;
+    });
+
+    let header = filter
+      ? `*Chats Matching: "${filter}"*\n`
+      : `*All Cached Chats*\n`;
+    header += `Page ${page} of ${totalPages} (${totalItems} total contacts)\n\n`;
+
+    const footer = `\n\nUse !find -c ${filter ? `-f "${filter}" ` : ""}-p ${page + 1} for the next page.`;
+
+    await sendBotReply(ctx.sock, ctx.from, `${header}${formatted.join("\n")}${page < totalPages ? footer : ""}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await sendBotReply(ctx.sock, ctx.from, `Failed to search chats:\n${msg}`);
+  }
+};
+
+// ── FIND (!find [-g|-c] [query]) ──
+const findHandler = async (ctx: any) => {
+  const rawArgs = [...ctx.cmdArgs];
+  const joined = rawArgs.join(" ");
+
+  const hasGroupFlag = /(?:^|\s)-(?:gid|g)(?:\s+|$)/i.test(joined) || /(?:^|\s)groups?(?:\s+|$)/i.test(joined);
+  const hasChatFlag = /(?:^|\s)-(?:cid|c)(?:\s+|$)/i.test(joined) || /(?:^|\s)chats?(?:\s+|$)/i.test(joined);
+
+  // Strip -g, -gid, -c, -cid, groups, chats from args so search filter doesn't include the flag itself
+  const filteredArgs = rawArgs.filter(
+    (arg) => !/^-(?:gid|g|cid|c)$/i.test(arg) && !/^(?:groups?|chats?)$/i.test(arg),
+  );
+  const subCtx = { ...ctx, cmdArgs: filteredArgs };
+
+  if (hasGroupFlag && !hasChatFlag) {
+    return findGroupsHandler(subCtx);
+  }
+  if (hasChatFlag && !hasGroupFlag) {
+    return findChatsHandler(subCtx);
+  }
+  // Context-aware fallback: groups if in a group, chats if in private chat
+  if (ctx.from.endsWith("@g.us")) {
+    return findGroupsHandler(subCtx);
+  } else {
+    return findChatsHandler(subCtx);
+  }
+};
+
 registerCommand({
   name: "findgroups",
   requiresAdmin: true,
-  handler: async (ctx) => {
-    try {
-      const rawArgs = ctx.cmdArgs.join(" ").trim();
-      let filter = "";
-      const filterMatch = rawArgs.match(/-f\s+([^\-]+)/i);
-      if (filterMatch) {
-        filter = filterMatch[1].trim().toLowerCase();
-      } else {
-        const noFlags = rawArgs.match(/^[^\-]*$/);
-        if (noFlags && rawArgs.length > 0) filter = rawArgs.toLowerCase();
-      }
-      let page = 1;
-      const pageMatch = rawArgs.match(/-p\s+(\d+)/i);
-      if (pageMatch) {
-        page = parseInt(pageMatch[1], 10);
-        if (isNaN(page) || page < 1) page = 1;
-      }
-
-      const groups = await ctx.sock.groupFetchAllParticipating();
-      let list = Object.values(groups) as any[];
-      if (list.length === 0) {
-        await sendBotReply(ctx.sock, ctx.from, "The bot is not currently in any groups.");
-        return;
-      }
-
-      // Sort by most-recent bot interaction (0 = never seen).
-      const withTime = await Promise.all(
-        list.map(async (g: any) => {
-          const t = await redis.get(`last_group_interaction:${g.id}`);
-          return { g, lastTime: t ? parseInt(t, 10) : 0 };
-        }),
-      );
-      withTime.sort((a, b) => b.lastTime - a.lastTime);
-      let sorted = withTime.map((x) => x.g);
-
-      if (filter) {
-        sorted = sorted.filter(
-          (g: any) =>
-            (g.subject || "").toLowerCase().includes(filter) ||
-            String(g.id).toLowerCase().includes(filter),
-        );
-      }
-      if (sorted.length === 0) {
-        await sendBotReply(ctx.sock, ctx.from, `No groups match "${filter}".`);
-        return;
-      }
-
-      const { paginate, PAGINATION_MAX_VIEW } = await import(
-        "../../../services/DKB/pagination"
-      );
-      const { pageItems, page: p, totalPages, total } = paginate(sorted, page);
-      const offset = (p - 1) * PAGINATION_MAX_VIEW;
-      const formatted = pageItems.map(
-        (g: any, idx) => `${offset + idx + 1}. ${g.subject} | JID: ${g.id}`,
-      );
-      const header = filter
-        ? `Groups matching "${filter}" (${total}):`
-        : `Groups the bot is in (${total}, recent first):`;
-      const footer =
-        totalPages > 1
-          ? `\n\nPage ${p}/${totalPages}${p < totalPages ? ` — !findgroups -p ${p + 1} for more.` : ""}`
-          : "";
-      await sendBotReply(
-        ctx.sock,
-        ctx.from,
-        `${header}\n${formatted.join("\n")}${footer}`,
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await sendBotReply(ctx.sock, ctx.from, `Failed to fetch groups:\n${msg}`);
-    }
-  }
+  handler: findGroupsHandler,
 });
 
-// ── FIND CHATS ──
+registerCommand({
+  name: "findgroup",
+  requiresAdmin: true,
+  handler: findGroupsHandler,
+});
+
 registerCommand({
   name: "findchats",
   requiresAdmin: true,
-  handler: async (ctx) => {
-    try {
-      const rawArgs = ctx.cmdArgs.join(" ").trim();
-      let filter = "";
-      let page = 1;
-
-      // Extract -f filter
-      const filterMatch = rawArgs.match(/-f\s+([^\-]+)/i);
-      if (filterMatch) {
-        filter = filterMatch[1].trim().toLowerCase();
-      } else {
-        // Fallback: If they just typed "!findchats keyword" without -f or -p, use the whole string as filter
-        const noFlagsMatch = rawArgs.match(/^[^\-]*$/);
-        if (noFlagsMatch && rawArgs.length > 0) {
-          filter = rawArgs.toLowerCase();
-        }
-      }
-
-      // Extract -p page
-      const pageMatch = rawArgs.match(/-p\s+(\d+)/i);
-      if (pageMatch) {
-        page = parseInt(pageMatch[1], 10);
-        if (isNaN(page) || page < 1) page = 1;
-      }
-
-      const allContacts = await redis.hgetall("contact_names");
-      if (!allContacts || Object.keys(allContacts).length === 0) {
-        await sendBotReply(ctx.sock, ctx.from, "No cached contacts found in the database yet.");
-        return;
-      }
-
-      let entries = Object.entries(allContacts);
-
-      if (filter) {
-        entries = entries.filter(([jid, name]) => {
-          return jid.toLowerCase().includes(filter) || name.toLowerCase().includes(filter);
-        });
-      }
-
-      if (entries.length === 0) {
-        const msg = filter ? `No cached contacts matched your query: "${filter}"` : "No contacts found.";
-        await sendBotReply(ctx.sock, ctx.from, msg);
-        return;
-      }
-
-      const { PAGINATION_MAX_VIEW: PAGE_SIZE } = await import(
-        "../../../services/DKB/pagination"
-      );
-      const totalItems = entries.length;
-      const totalPages = Math.ceil(totalItems / PAGE_SIZE);
-
-      if (page > totalPages) page = totalPages;
-
-      const startIndex = (page - 1) * PAGE_SIZE;
-      const paginatedEntries = entries.slice(startIndex, startIndex + PAGE_SIZE);
-
-      const formatted = paginatedEntries.map(([jid, name], idx) => {
-        return `${startIndex + idx + 1}. ${name} | JID: ${jid}`;
-      });
-
-      let header = filter
-        ? `*Chats Matching: "${filter}"*\n`
-        : `*All Cached Chats*\n`;
-      header += `Page ${page} of ${totalPages} (${totalItems} total contacts)\n\n`;
-
-      const footer = `\n\nUse !findchats ${filter ? `-f ${filter} ` : ""}-p ${page + 1} for the next page.`;
-
-      await sendBotReply(ctx.sock, ctx.from, `${header}${formatted.join("\n")}${page < totalPages ? footer : ""}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await sendBotReply(ctx.sock, ctx.from, `Failed to search chats:\n${msg}`);
-    }
-  }
+  handler: findChatsHandler,
 });
 
 registerCommand({
   name: "findchat",
   requiresAdmin: true,
-  handler: async (ctx) => {
-    const registry = (await import("../commandRegistry")).dispatchCommand;
-    await registry({ ...ctx, cmdName: "findchats" });
-  }
+  handler: findChatsHandler,
+});
+
+registerCommand({
+  name: "find",
+  requiresAdmin: true,
+  handler: findHandler,
 });

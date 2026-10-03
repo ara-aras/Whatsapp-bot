@@ -184,4 +184,84 @@ describe("allowlistController - target resolution & delete command", () => {
     expect(session.pendingDeleteGroup).toBeDefined();
     expect(session.pendingDeleteGroup.id).toBe(8);
   });
+
+  it("!list -g lists allowed groups and !list -c lists allowed chats", async () => {
+    // !list -g
+    let success = await dispatchCommand({
+      sock: mockSock,
+      msg: mockMsg,
+      cmdName: "list",
+      cmdArgs: ["-g"],
+      senderId: "admin@s.whatsapp.net",
+      from: "120363409293397238@g.us",
+      session,
+    });
+    expect(success).toBe(true);
+    expect(sendBotReply).toHaveBeenCalledWith(
+      mockSock,
+      "120363409293397238@g.us",
+      expect.stringContaining("Allowed groups:"),
+    );
+
+    // !list -c
+    success = await dispatchCommand({
+      sock: mockSock,
+      msg: mockMsg,
+      cmdName: "list",
+      cmdArgs: ["-c"],
+      senderId: "admin@s.whatsapp.net",
+      from: "120363409293397238@g.us",
+      session,
+    });
+    expect(success).toBe(true);
+    expect(sendBotReply).toHaveBeenCalledWith(
+      mockSock,
+      "120363409293397238@g.us",
+      expect.stringContaining("Allowed chats:"),
+    );
+  });
+
+  it("!find -g searches participating groups and !find -c searches cached contacts", async () => {
+    mockSock.groupFetchAllParticipating = vi.fn().mockResolvedValue({
+      "120363388522934413@g.us": { id: "120363388522934413@g.us", subject: "DK24 - Cluster" },
+    });
+    const { redis } = await import("../../storage/redisClient");
+    (redis.hgetall as any).mockResolvedValue({
+      "919876543210@s.whatsapp.net": "Alice Tester",
+    });
+
+    // !find -g Cluster
+    let success = await dispatchCommand({
+      sock: mockSock,
+      msg: mockMsg,
+      cmdName: "find",
+      cmdArgs: ["-g", "Cluster"],
+      senderId: "admin@s.whatsapp.net",
+      from: "120363409293397238@g.us",
+      session,
+    });
+    expect(success).toBe(true);
+    expect(sendBotReply).toHaveBeenCalledWith(
+      mockSock,
+      "120363409293397238@g.us",
+      expect.stringContaining("DK24 - Cluster"),
+    );
+
+    // !find -c Alice
+    success = await dispatchCommand({
+      sock: mockSock,
+      msg: mockMsg,
+      cmdName: "find",
+      cmdArgs: ["-c", "Alice"],
+      senderId: "admin@s.whatsapp.net",
+      from: "120363409293397238@g.us",
+      session,
+    });
+    expect(success).toBe(true);
+    expect(sendBotReply).toHaveBeenCalledWith(
+      mockSock,
+      "120363409293397238@g.us",
+      expect.stringContaining("Alice Tester"),
+    );
+  });
 });

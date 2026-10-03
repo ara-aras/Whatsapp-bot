@@ -539,6 +539,8 @@ async function processInboundMessage(
     let cmdName = (parts[0] || "").toLowerCase();
     if (cmdName === "listgroup") cmdName = "listgroups";
     if (cmdName === "listchat") cmdName = "listchats";
+    if (cmdName === "findgroup") cmdName = "findgroups";
+    if (cmdName === "findchat") cmdName = "findchats";
     if (cmdName === "delete") cmdName = "rm";
     const cmdArgs = parts.slice(1);
 
@@ -625,9 +627,16 @@ async function processInboundMessage(
         "edit",
         "enable",
         "disable",
+        "list",
         "listgroups",
+        "listgroup",
         "listchats",
+        "listchat",
+        "find",
         "findgroups",
+        "findgroup",
+        "findchats",
+        "findchat",
         "neonping",
         "neonconnect",
         "notify",
