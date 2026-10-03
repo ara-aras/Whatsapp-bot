@@ -546,16 +546,18 @@ async function startBot(): Promise<void> {
     },
     groups: {
       list: () => groupConfig.listGroups(),
-      add: (jid, bot) => groupConfig.addGroup(jid, bot),
+      add: (jid, bot, lvl) => groupConfig.addGroup(jid, bot, lvl),
       remove: (id) => groupConfig.removeGroupById(id),
-      setBot: (id, bot) => groupConfig.editGroupBot(id, bot),
+      setBot: (id, bot, lvl) => groupConfig.editGroupBot(id, bot, lvl),
+      setLevel: (id, lvl) => groupConfig.editGroupBot(id, groupConfig.getGroupEntryById(id)?.botNumber ?? 1, lvl),
       setEnabled: (id, on) => groupConfig.setGroupEnabled(id, on),
     },
     chats: {
       list: () => chatConfig.listChats(),
-      add: (jid, bot) => chatConfig.addChat(jid, bot),
+      add: (jid, bot, lvl) => chatConfig.addChat(jid, bot, lvl),
       remove: (id) => chatConfig.removeChatById(id),
-      setBot: (id, bot) => chatConfig.editChatBot(id, bot),
+      setBot: (id, bot, lvl) => chatConfig.editChatBot(id, bot, lvl),
+      setLevel: (id, lvl) => chatConfig.editChatBot(id, chatConfig.getChatEntryById(id)?.botNumber ?? 1, lvl),
       setEnabled: (id, on) => chatConfig.setChatEnabled(id, on),
     },
     discoverGroups: async () => {

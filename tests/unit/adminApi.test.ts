@@ -7,12 +7,12 @@ const PORT = 39323;
 
 // In-memory stand-in for the allowlist singletons; mirrors their contract.
 function fakeList(seed: AllowEntry[]) {
-  let rows = seed.map((r) => ({ ...r }));
+  let rows = seed.map((r) => ({ ...r, level: r.level ?? 1 }));
   let nextId = Math.max(0, ...seed.map((r) => r.id)) + 1;
   return {
     list: () => rows,
-    add: async (jid: string, botNumber: number) => {
-      rows.push({ id: nextId++, jid, botNumber, enabled: true });
+    add: async (jid: string, botNumber: number, level?: number) => {
+      rows.push({ id: nextId++, jid, botNumber, level: level ?? 1, enabled: true });
       return true;
     },
     remove: async (id: number) => {
@@ -20,10 +20,17 @@ function fakeList(seed: AllowEntry[]) {
       rows = rows.filter((r) => r.id !== id);
       return rows.length < before;
     },
-    setBot: async (id: number, botNumber: number) => {
+    setBot: async (id: number, botNumber: number, level?: number) => {
       const r = rows.find((x) => x.id === id);
       if (!r) return false;
       r.botNumber = botNumber;
+      if (level !== undefined) r.level = level;
+      return true;
+    },
+    setLevel: async (id: number, level: number) => {
+      const r = rows.find((x) => x.id === id);
+      if (!r) return false;
+      r.level = level;
       return true;
     },
     setEnabled: async (id: number, enabled: boolean) => {
@@ -33,16 +40,16 @@ function fakeList(seed: AllowEntry[]) {
       return true;
     },
     reset: () => {
-      rows = seed.map((r) => ({ ...r }));
+      rows = seed.map((r) => ({ ...r, level: r.level ?? 1 }));
     },
   };
 }
 
 const groups = fakeList([
-  { id: 1, jid: "111@g.us", botNumber: 2, enabled: true },
-  { id: 2, jid: "222@g.us", botNumber: 1, enabled: false },
+  { id: 1, jid: "111@g.us", botNumber: 2, level: 1, enabled: true },
+  { id: 2, jid: "222@g.us", botNumber: 1, level: 2, enabled: false },
 ]);
-const chats = fakeList([{ id: 10, jid: "919000000001@s.whatsapp.net", botNumber: 3, enabled: true }]);
+const chats = fakeList([{ id: 10, jid: "919000000001@s.whatsapp.net", botNumber: 3, level: 1, enabled: true }]);
 
 function call(
   path: string,
@@ -140,6 +147,18 @@ describe("allowlist CRUD", () => {
 
     const r3 = await call("/admin/api/groups/1", { method: "PATCH", body: { botNumber: 3 } });
     expect(r3.json.updated).toEqual([]); // no-op is fine, not an error
+
+    const r4 = await call("/admin/api/groups/1", { method: "PATCH", body: { level: 2 } });
+    expect(r4.status).toBe(200);
+    expect(r4.json.updated).toEqual(["level"]);
+    expect(r4.json.entry.level).toBe(2);
+    expect(groups.list().find((g) => g.id === 1)!.level).toBe(2);
+  });
+
+  it("adds a group with specific level", async () => {
+    const r = await call("/admin/api/groups", { method: "POST", body: { jid: "444@g.us", botNumber: 2, level: 2 } });
+    expect(r.status).toBe(201);
+    expect(groups.list().find((g) => g.jid === "444@g.us")!.level).toBe(2);
   });
 
   it("404s on unknown ids and validates bot numbers", async () => {
@@ -175,4 +194,29 @@ describe("status", () => {
     const r = await call("/admin/api/status");
     expect(r.json.bots).toMatchObject({ 2: "DKB" });
   });
+
+  it("includes services health status", async () => {
+    const r = await call("/admin/api/status");
+    expect(r.json.services).toBeDefined();
+    expect(r.json.services.search).toBeDefined();
+  });
 });
+
+describe("audit and restore", () => {
+  it("returns audit logs array", async () => {
+    const r = await call("/admin/api/audit");
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.json.logs)).toBe(true);
+  });
+
+  it("restores a deleted group via /admin/api/audit/restore", async () => {
+    const r = await call("/admin/api/audit/restore", {
+      method: "POST",
+      body: { jid: "999@g.us", botNumber: 2, level: 2, kind: "group" },
+    });
+    expect(r.status).toBe(200);
+    expect(groups.list().find((g) => g.jid === "999@g.us")).toBeDefined();
+    expect(groups.list().find((g) => g.jid === "999@g.us")!.level).toBe(2);
+  });
+});
+

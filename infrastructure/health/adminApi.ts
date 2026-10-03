@@ -26,7 +26,11 @@ export interface AllowEntry {
   id: number;
   jid: string;
   botNumber: number;
+  level?: number;
   enabled: boolean;
+  name?: string | null;
+  size?: number | null;
+  lastActive?: number | null;
 }
 
 export interface DiscoveredGroup {
@@ -41,16 +45,18 @@ export interface AdminDeps {
   restart: () => void;
   groups: {
     list: () => AllowEntry[];
-    add: (jid: string, botNumber: number) => Promise<boolean>;
+    add: (jid: string, botNumber: number, level?: number) => Promise<boolean>;
     remove: (id: number) => Promise<boolean>;
-    setBot: (id: number, botNumber: number) => Promise<boolean>;
+    setBot: (id: number, botNumber: number, level?: number) => Promise<boolean>;
+    setLevel?: (id: number, level: number) => Promise<boolean>;
     setEnabled: (id: number, enabled: boolean) => Promise<boolean>;
   };
   chats: {
     list: () => AllowEntry[];
-    add: (jid: string, botNumber: number) => Promise<boolean>;
+    add: (jid: string, botNumber: number, level?: number) => Promise<boolean>;
     remove: (id: number) => Promise<boolean>;
-    setBot: (id: number, botNumber: number) => Promise<boolean>;
+    setBot: (id: number, botNumber: number, level?: number) => Promise<boolean>;
+    setLevel?: (id: number, level: number) => Promise<boolean>;
     setEnabled: (id: number, enabled: boolean) => Promise<boolean>;
   };
   /** Groups the linked number is a member of (from the live socket). */
@@ -114,7 +120,42 @@ async function handleAllowlist(
   const list = deps![kind];
 
   if (rest === "" && req.method === "GET") {
-    json(res, 200, { [kind]: list.list() });
+    let items = list.list().map((e) => ({ ...e, level: e.level ?? 1 }));
+    try {
+      const { redis } = await import("../../storage/redisClient");
+      if (kind === "groups") {
+        const jids = items.map((x) => x.jid);
+        const keys = jids.map((j) => `last_group_interaction:${j}`);
+        let times: (string | null)[] = [];
+        if (keys.length > 0) {
+          times = await redis.mget(...keys).catch(() => []);
+        }
+        let discovered: { jid: string; subject: string; size: number }[] = [];
+        try {
+          discovered = await deps!.discoverGroups();
+        } catch {}
+        const discMap = new Map(discovered.map((d) => [d.jid, d]));
+        items = items.map((item, idx) => {
+          const disc = discMap.get(item.jid);
+          const t = times[idx] ? parseInt(times[idx]!, 10) : null;
+          return {
+            ...item,
+            name: disc?.subject || item.name || null,
+            size: disc?.size ?? item.size ?? null,
+            lastActive: t,
+          };
+        });
+      } else {
+        const names = await redis.hgetall("contact_names").catch(() => ({}));
+        items = items.map((item) => ({
+          ...item,
+          name: names[item.jid] || item.name || null,
+        }));
+      }
+    } catch {
+      /* non-fatal fallback */
+    }
+    json(res, 200, { [kind]: items });
     return;
   }
 
@@ -142,8 +183,10 @@ async function handleAllowlist(
       json(res, 409, { error: "already_allowlisted" });
       return;
     }
-    const ok = await list.add(jid, botNumber);
-    json(res, ok ? 201 : 500, ok ? { added: true, jid, botNumber } : { error: "add_failed" });
+    const lvlRaw = body.level !== undefined ? Number(body.level) : 1;
+    const level = lvlRaw === 2 ? 2 : 1;
+    const ok = await list.add(jid, botNumber, level);
+    json(res, ok ? 201 : 500, ok ? { added: true, jid, botNumber, level } : { error: "add_failed" });
     return;
   }
 
@@ -175,11 +218,29 @@ async function handleAllowlist(
         return;
       }
       if (bot !== entry.botNumber) {
-        if (!(await list.setBot(id, bot))) {
+        const curLvl = entry.level ?? 1;
+        if (!(await list.setBot(id, bot, curLvl))) {
           json(res, 500, { error: "update_failed", field: "botNumber" });
           return;
         }
         changes.push("botNumber");
+      }
+    }
+    if (body.level !== undefined) {
+      const lvl = Number(body.level);
+      if (lvl !== 1 && lvl !== 2) {
+        json(res, 400, { error: "bad_request", detail: "level must be 1 or 2" });
+        return;
+      }
+      if (lvl !== (entry.level ?? 1)) {
+        const setLevelFn = list.setLevel
+          ? list.setLevel.bind(list)
+          : (i: number, l: number) => list.setBot(i, entry.botNumber, l);
+        if (!(await setLevelFn(id, lvl))) {
+          json(res, 500, { error: "update_failed", field: "level" });
+          return;
+        }
+        changes.push("level");
       }
     }
     if (body.enabled !== undefined) {
@@ -220,6 +281,41 @@ export async function handleAdminApi(
   if (route === "status" && req.method === "GET") {
     const now = Date.now();
     const mc = getLastModelCheck();
+
+    // Live infrastructure health checks
+    let neonHealth = { ok: false, latencyMs: -1 };
+    try {
+      const { getPool } = await import("../../storage/db");
+      const pool = getPool();
+      if (pool) {
+        const t0 = Date.now();
+        await pool.query("SELECT 1");
+        neonHealth = { ok: true, latencyMs: Date.now() - t0 };
+      }
+    } catch {
+      /* database down or offline */
+    }
+
+    let redisHealth = { ok: false, latencyMs: -1, keyCount: 0 };
+    try {
+      const { redis } = await import("../../storage/redisClient");
+      const t0 = Date.now();
+      const pong = await redis.ping();
+      if (pong === "PONG") {
+        const dbsize = await redis.dbsize().catch(() => 0);
+        redisHealth = { ok: true, latencyMs: Date.now() - t0, keyCount: dbsize };
+      }
+    } catch {
+      /* redis down */
+    }
+
+    const searchHealth = {
+      tavily: !!process.env.TAVILY_API_KEY,
+      brave: !!process.env.BRAVE_API_KEY,
+      firecrawl: !!process.env.FIRECRAWL_API_KEY,
+      exa: !!process.env.EXA_API_KEY,
+    };
+
     json(res, 200, {
       state: s.state,
       healthy: isHealthy(),
@@ -236,6 +332,11 @@ export async function handleAdminApi(
       version: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null,
       bots: deps.botLabels(),
       models: mc ? { checkedAt: mc.checkedAt, models: mc.models, error: mc.error } : null,
+      services: {
+        neon: neonHealth,
+        redis: redisHealth,
+        search: searchHealth,
+      },
     });
     return;
   }
@@ -320,6 +421,87 @@ export async function handleAdminApi(
     const ok = await revokeApiKey(Number(revoke[1]));
     json(res, ok ? 200 : 404, ok ? { revoked: true } : { error: "not_found_or_already_revoked" });
     return;
+  }
+
+  // ── audit logs ──────────────────────────────────────────────────────
+  if (route === "audit" && req.method === "GET") {
+    try {
+      const { getRecentActionLogs } = await import("../../storage/core/auditRepository");
+      const logs = await getRecentActionLogs(30);
+      json(res, 200, { logs });
+    } catch (err) {
+      json(res, 500, { error: "failed_to_fetch_audit_logs", detail: String(err) });
+    }
+    return;
+  }
+
+  if (route === "audit/restore" && req.method === "POST") {
+    let body: any;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      json(res, 400, { error: (err as Error).message });
+      return;
+    }
+
+    let jid = body?.jid;
+    let bot = body?.botNumber ?? 1;
+    let level = body?.level ?? 1;
+    let isGroup = body?.kind === "group" || (typeof jid === "string" && jid.endsWith("@g.us"));
+    let logRef = null;
+
+    if (body?.logId) {
+      const logId = Number(body.logId);
+      try {
+        const { getRecentActionLogs } = await import("../../storage/core/auditRepository");
+        const logs = await getRecentActionLogs(100);
+        const targetLog = logs.find((l) => l.id === logId);
+        if (!targetLog) {
+          json(res, 404, { error: "audit_log_not_found" });
+          return;
+        }
+        let details: any = {};
+        try {
+          details = targetLog.details ? JSON.parse(targetLog.details) : {};
+        } catch {}
+
+        jid = details.jid || targetLog.targetName || jid;
+        bot = details.botNumber ?? bot;
+        level = details.level ?? level;
+        if (targetLog.actionType.includes("group")) isGroup = true;
+        logRef = String(logId);
+      } catch (err) {
+        json(res, 500, { error: "restore_error", detail: String(err) });
+        return;
+      }
+    }
+
+    if (!jid) {
+      json(res, 400, { error: "bad_request", detail: "logId or jid is required" });
+      return;
+    }
+
+    try {
+      const { logAction } = await import("../../storage/core/auditRepository");
+      let restored = false;
+      if (isGroup) {
+        restored = await deps.groups.add(jid, bot, level);
+        if (restored) {
+          await logAction("admin_web", "restore_group", logRef, jid, JSON.stringify({ jid, botNumber: bot, level }));
+        }
+      } else {
+        restored = await deps.chats.add(jid, bot, level);
+        if (restored) {
+          await logAction("admin_web", "restore_chat", logRef, jid, JSON.stringify({ jid, botNumber: bot, level }));
+        }
+      }
+
+      json(res, restored ? 200 : 500, restored ? { ok: true, jid, botNumber: bot, level } : { error: "restore_failed" });
+      return;
+    } catch (err) {
+      json(res, 500, { error: "restore_error", detail: String(err) });
+      return;
+    }
   }
 
   json(res, 404, { error: "not_found" });

@@ -30,6 +30,34 @@ export async function logAction(
   }
 }
 
+export interface ActionLogEntry {
+  id: number;
+  actorJid: string;
+  actionType: string;
+  targetId: string | null;
+  targetName: string | null;
+  details: string | null;
+  createdAt: string;
+}
+
+export async function getRecentActionLogs(limit = 25): Promise<ActionLogEntry[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  try {
+    const res = await pool.query(
+      `SELECT id, actor_jid AS "actorJid", action_type AS "actionType", target_id AS "targetId", target_name AS "targetName", details, logged_at AS "createdAt"
+       FROM dk24_action_logs
+       ORDER BY id DESC
+       LIMIT $1`,
+      [limit],
+    );
+    return res.rows;
+  } catch (error) {
+    console.error("⚠️ Error fetching action logs:", error);
+    return [];
+  }
+}
+
 function getUtcDayBucket(): string {
   return new Date().toISOString().slice(0, 10);
 }

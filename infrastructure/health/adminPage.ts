@@ -121,6 +121,21 @@ export function renderAdminPage(): string {
   .flash { font-size:13px; color:var(--mist); min-height:18px; margin-top:8px; }
   .flash.err { color:var(--laterite); }
   .flash.ok { color:var(--harbour); }
+  .badge { display:inline-block; font-size:11px; font-weight:600; padding:2px 7px; border-radius:4px; vertical-align:middle; text-transform:uppercase; letter-spacing:.03em; }
+  .badge.ok { background:var(--harbour-soft); color:var(--harbour); }
+  .badge.warn { background:var(--turmeric-soft); color:var(--turmeric); }
+  .badge.err { background:var(--laterite-soft); color:var(--laterite); }
+  .badge.neutral { background:var(--rule-soft); color:var(--ink); }
+  .services-bar { display:flex; gap:14px; margin-top:16px; padding-top:14px; border-top:1px solid var(--rule-soft); flex-wrap:wrap; font-size:13px; align-items:center; }
+  .service-item { display:inline-flex; align-items:center; gap:6px; }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .dot.ok { background:var(--harbour); }
+  .dot.warn { background:var(--turmeric); }
+  .dot.err { background:var(--laterite); }
+  .dot.off { background:var(--mist); }
+  .activity-chip { display:inline-block; font-size:11px; padding:1px 6px; border-radius:3px; background:var(--rule-soft); color:var(--mist); margin-left:6px; font-weight:normal; }
+  .activity-chip.live { background:var(--harbour-soft); color:var(--harbour); font-weight:500; }
+  .restore-btn { font-size:12px; padding:3px 8px; border-radius:3px; }
   @media (max-width:640px) { th.hide-sm, td.hide-sm { display:none; } td, th { padding:9px 8px; } section.list, .panel { overflow-x:auto; } table { min-width:480px; } }
 </style>
 </head>
@@ -163,6 +178,12 @@ export function renderAdminPage(): string {
       <p id="factMsgs"></p>
       <p id="factUp"></p>
       <p id="factModels"></p>
+      <div class="services-bar" id="servicesBar">
+        <span class="service-item"><span class="dot off" id="dotNeon"></span> <span id="lblNeon">Neon DB</span></span>
+        <span class="service-item"><span class="dot off" id="dotRedis"></span> <span id="lblRedis">Redis</span></span>
+        <span class="service-item"><span class="dot off" id="dotGroq"></span> <span id="lblGroq">Groq AI</span></span>
+        <span class="service-item" id="searchProviders"></span>
+      </div>
       <div class="flash" id="actionMsg"></div>
     </div>
   </section>
@@ -171,17 +192,26 @@ export function renderAdminPage(): string {
     <div class="sechead">
       <h2>Groups <small id="grpCount"></small></h2>
       <button id="addGroupBtn">Add a group</button>
-      <div class="hint">Groups the bot answers in. The bot column decides which persona replies.</div>
+      <div class="hint">Groups the bot answers in. The bot column decides persona; Level sets capabilities (Lvl 2 = Live Search).</div>
     </div>
     <div class="panel hidden" id="addGroupPanel">
-      <p>Groups this number is a member of but the bot ignores. Pick a bot and add.</p>
-      <div class="row"><input id="grpManual" placeholder="or paste a group JID (…@g.us)"><select id="grpManualBot"></select><button id="grpManualAdd">Add</button><button id="addGroupClose" class="quiet">Close</button></div>
-      <table><thead><tr><th>Group</th><th class="hide-sm">Members</th><th>Bot</th><th></th></tr></thead><tbody id="discRows"><tr class="empty"><td colspan="4">Loading groups from WhatsApp…</td></tr></tbody></table>
+      <p>Groups this number is a member of but the bot ignores. Pick a bot, select level, and add.</p>
+      <div class="row">
+        <input id="grpManual" placeholder="or paste a group JID (…@g.us)">
+        <select id="grpManualBot"></select>
+        <select id="grpManualLvl">
+          <option value="1">Lvl 1 (Community)</option>
+          <option value="2">Lvl 2 (Live Search)</option>
+        </select>
+        <button id="grpManualAdd">Add</button>
+        <button id="addGroupClose" class="quiet">Close</button>
+      </div>
+      <table><thead><tr><th>Group</th><th class="hide-sm">Members</th><th>Bot</th><th>Level</th><th></th></tr></thead><tbody id="discRows"><tr class="empty"><td colspan="5">Loading groups from WhatsApp…</td></tr></tbody></table>
       <div class="flash" id="grpAddMsg"></div>
     </div>
     <table>
-      <thead><tr><th>Group</th><th>Bot</th><th>Active</th><th></th></tr></thead>
-      <tbody id="grpRows"><tr class="empty"><td colspan="4">Loading…</td></tr></tbody>
+      <thead><tr><th>Group</th><th class="hide-sm">Activity</th><th>Bot</th><th>Level</th><th>Active</th><th></th></tr></thead>
+      <tbody id="grpRows"><tr class="empty"><td colspan="6">Loading…</td></tr></tbody>
     </table>
     <div class="flash" id="grpMsg"></div>
   </section>
@@ -193,12 +223,21 @@ export function renderAdminPage(): string {
       <div class="hint">People the bot replies to in private. Admins are always allowed and don't need to be here.</div>
     </div>
     <div class="panel hidden" id="addChatPanel">
-      <div class="row"><input id="chatNum" placeholder="Phone with country code, e.g. 919902849280" inputmode="numeric"><select id="chatBot"></select><button id="chatAdd">Add</button><button id="addChatClose" class="quiet">Close</button></div>
+      <div class="row">
+        <input id="chatNum" placeholder="Phone with country code, e.g. 919902849280" inputmode="numeric">
+        <select id="chatBot"></select>
+        <select id="chatLvl">
+          <option value="1">Lvl 1 (Community)</option>
+          <option value="2">Lvl 2 (Live Search)</option>
+        </select>
+        <button id="chatAdd">Add</button>
+        <button id="addChatClose" class="quiet">Close</button>
+      </div>
       <div class="flash" id="chatAddMsg"></div>
     </div>
     <table>
-      <thead><tr><th>Number</th><th>Bot</th><th>Active</th><th></th></tr></thead>
-      <tbody id="chatRows"><tr class="empty"><td colspan="4">Loading…</td></tr></tbody>
+      <thead><tr><th>Number</th><th>Bot</th><th>Level</th><th>Active</th><th></th></tr></thead>
+      <tbody id="chatRows"><tr class="empty"><td colspan="5">Loading…</td></tr></tbody>
     </table>
     <div class="flash" id="chatMsg"></div>
   </section>
@@ -219,6 +258,19 @@ export function renderAdminPage(): string {
       <tbody id="kRows"><tr class="empty"><td colspan="5">Loading…</td></tr></tbody>
     </table>
     <div class="flash" id="kMsg"></div>
+  </section>
+
+  <section class="list" id="secAudit">
+    <div class="sechead">
+      <h2>Recent Activity & Audit Logs <small id="auditCount"></small></h2>
+      <button id="refreshAuditBtn" class="quiet">Refresh logs</button>
+      <div class="hint">History of allowlist modifications and administrative actions with quick restore.</div>
+    </div>
+    <table>
+      <thead><tr><th>Action</th><th>Target</th><th>Details</th><th class="hide-sm">Time</th><th></th></tr></thead>
+      <tbody id="auditRows"><tr class="empty"><td colspan="5">Loading logs…</td></tr></tbody>
+    </table>
+    <div class="flash" id="auditMsg"></div>
   </section>
 </div>
 </div>
@@ -286,7 +338,7 @@ export function renderAdminPage(): string {
   }
   function showApp() {
     $("login").classList.add("hidden"); $("app").classList.remove("hidden");
-    refresh(); primeGroupNames(); loadChats(); loadKeys();
+    refresh(); primeGroupNames(); loadChats(); loadKeys(); loadAudit();
     if (!timer) timer = setInterval(refresh, 5000);
   }
 
@@ -344,6 +396,33 @@ export function renderAdminPage(): string {
       if (!s.models) fm.textContent = "";
       else if (s.models.error) fm.textContent = "Couldn't verify models: " + s.models.error;
       else { var bad = s.models.models.filter(function (m) { return !m.ok; }); if (bad.length) { fm.className = "warn"; fm.textContent = "Groq no longer serves " + bad.map(function (m) { return m.id; }).join(", ") + ". Change GROQ_MODEL." } else fm.textContent = "Models OK."; }
+
+      // Services & API Health Bar
+      if (s.services) {
+        var nDot = $("dotNeon"), nLbl = $("lblNeon");
+        if (s.services.neon) {
+          nDot.className = "dot " + (s.services.neon.ok ? "ok" : "err");
+          nLbl.textContent = "Neon (" + (s.services.neon.latencyMs != null ? s.services.neon.latencyMs + "ms" : (s.services.neon.ok ? "ok" : "err")) + ")";
+        }
+        var rDot = $("dotRedis"), rLbl = $("lblRedis");
+        if (s.services.redis) {
+          rDot.className = "dot " + (s.services.redis.ok ? "ok" : "err");
+          rLbl.textContent = "Redis (" + (s.services.redis.latencyMs != null ? s.services.redis.latencyMs + "ms" : (s.services.redis.ok ? "ok" : "err")) + ")";
+        }
+        var gDot = $("dotGroq"), gLbl = $("lblGroq");
+        if (s.models) {
+          var anyBad = s.models.error || (s.models.models && s.models.models.some(function (m) { return !m.ok; }));
+          gDot.className = "dot " + (s.models.error ? "err" : (anyBad ? "warn" : "ok"));
+          gLbl.textContent = anyBad ? "Groq (warn)" : "Groq AI";
+        }
+        var sp = $("searchProviders");
+        if (sp && s.services.search) {
+          var activeSearches = Object.keys(s.services.search).filter(function (k) { return s.services.search[k]; });
+          sp.innerHTML = activeSearches.length ?
+            ('<span class="dot ok"></span> <span>Search (' + esc(activeSearches.join(", ")) + ')</span>') :
+            ('<span class="dot off"></span> <span class="muted">Search (none)</span>');
+        }
+      }
     }).catch(function (e) { if (e.message !== "unauthorized") flash("actionMsg", "Couldn't reach the bot: " + e.message, "err"); });
   }
 
@@ -355,21 +434,42 @@ export function renderAdminPage(): string {
 
   // ── allowlists ────────────────────────────────────────────────────
   function rowFor(kind, e) {
-    var label = kind === "groups" ? (groupNames[e.jid] || "Group") : phone(e.jid);
-    var sub = kind === "groups" ? e.jid : e.jid;
+    var label = kind === "groups" ? (e.name || groupNames[e.jid] || "Group") : (e.name || phone(e.jid));
+    var sub = e.jid;
+    var lvlOpt = '<select data-act="lvl" aria-label="Level for ' + esc(label) + '">' +
+      '<option value="1"' + (e.level === 2 ? "" : " selected") + '>Lvl 1 (Community)</option>' +
+      '<option value="2"' + (e.level === 2 ? " selected" : "") + '>Lvl 2 (Live Search)</option>' +
+      '</select>';
+
+    if (kind === "groups") {
+      var actHtml = e.lastActive ?
+        ('<span class="activity-chip' + ((Date.now() - e.lastActive < 3600000) ? ' live' : '') + '">' + esc(ago(e.lastActive)) + ' ago</span>') :
+        '<span class="muted">—</span>';
+      var memberHtml = e.size != null ? (' <span class="badge">' + e.size + ' members</span>') : "";
+      return '<tr data-id="' + e.id + '" class="' + (e.enabled ? "" : "off") + '">' +
+        '<td>' + esc(label) + memberHtml + '<span class="sub mono">' + esc(sub) + '</span></td>' +
+        '<td class="hide-sm">' + actHtml + '</td>' +
+        '<td class="num"><select data-act="bot" aria-label="Bot for ' + esc(label) + '">' + botOptions(e.botNumber, false) + '</select></td>' +
+        '<td class="num">' + lvlOpt + '</td>' +
+        '<td class="num"><label class="toggle"><input type="checkbox" data-act="on"' + (e.enabled ? " checked" : "") + ' aria-label="Active"><span class="muted">' + (e.enabled ? "on" : "off") + '</span></label></td>' +
+        '<td class="actions"><button class="quiet danger" data-act="rm">Remove</button></td></tr>';
+    }
+
     return '<tr data-id="' + e.id + '" class="' + (e.enabled ? "" : "off") + '">' +
       '<td>' + esc(label) + '<span class="sub mono">' + esc(sub) + '</span></td>' +
       '<td class="num"><select data-act="bot" aria-label="Bot for ' + esc(label) + '">' + botOptions(e.botNumber, false) + '</select></td>' +
+      '<td class="num">' + lvlOpt + '</td>' +
       '<td class="num"><label class="toggle"><input type="checkbox" data-act="on"' + (e.enabled ? " checked" : "") + ' aria-label="Active"><span class="muted">' + (e.enabled ? "on" : "off") + '</span></label></td>' +
       '<td class="actions"><button class="quiet danger" data-act="rm">Remove</button></td></tr>';
   }
   function loadList(kind, rowsId, countId, msgId) {
+    var cols = kind === "groups" ? 6 : 5;
     apiJson(kind).then(function (j) {
       var rows = j[kind];
       $(countId).textContent = rows.length ? rows.length : "";
       $(rowsId).innerHTML = rows.length ? rows.map(function (e) { return rowFor(kind, e); }).join("") :
-        '<tr class="empty"><td colspan="4">' + (kind === "groups" ? "The bot isn't answering in any group yet. Add one above." : "No private chats allowed yet.") + '</td></tr>';
-    }).catch(function (e) { $(rowsId).innerHTML = "<tr class='empty'><td colspan='4'>Couldn't load this list.</td></tr>"; flash(msgId, e.message, "err"); });
+        '<tr class="empty"><td colspan="' + cols + '">' + (kind === "groups" ? "The bot isn't answering in any group yet. Add one above." : "No private chats allowed yet.") + '</td></tr>';
+    }).catch(function (e) { $(rowsId).innerHTML = '<tr class="empty"><td colspan="' + cols + '">Could not load this list.</td></tr>'; flash(msgId, e.message, "err"); });
   }
   function loadGroups() { loadList("groups", "grpRows", "grpCount", "grpMsg"); }
   // Fetch group subjects from WhatsApp once so the table shows names, not just JIDs.
@@ -384,7 +484,10 @@ export function renderAdminPage(): string {
     $(rowsId).addEventListener("change", function (ev) {
       var t = ev.target, tr = t.closest("tr"); if (!tr) return; var id = tr.getAttribute("data-id");
       if (t.getAttribute("data-act") === "bot") {
-        apiJson(kind + "/" + id, { method: "PATCH", body: { botNumber: Number(t.value) } }).then(function () { flash(msgId, "Bot changed.", "ok"); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
+        apiJson(kind + "/" + id, { method: "PATCH", body: { botNumber: Number(t.value) } }).then(function () { flash(msgId, "Bot changed.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
+      }
+      if (t.getAttribute("data-act") === "lvl") {
+        apiJson(kind + "/" + id, { method: "PATCH", body: { level: Number(t.value) } }).then(function () { flash(msgId, "Level changed.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
       }
       if (t.getAttribute("data-act") === "on") {
         apiJson(kind + "/" + id, { method: "PATCH", body: { enabled: t.checked } }).then(function () { flash(msgId, t.checked ? "Turned on." : "Turned off.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
@@ -394,7 +497,7 @@ export function renderAdminPage(): string {
       var t = ev.target; if (t.getAttribute("data-act") !== "rm") return;
       var tr = t.closest("tr"), id = tr.getAttribute("data-id"), name = tr.querySelector("td").firstChild.nodeValue;
       if (!confirm("Remove " + name + "? The bot will stop answering there.")) return;
-      apiJson(kind + "/" + id, { method: "DELETE" }).then(function () { flash(msgId, "Removed.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); });
+      apiJson(kind + "/" + id, { method: "DELETE" }).then(function () { flash(msgId, "Removed.", "ok"); reload(); loadAudit(); }).catch(function (e) { flash(msgId, e.message, "err"); });
     });
   }
   bindList("groups", "grpRows", "grpMsg", loadGroups);
@@ -403,27 +506,31 @@ export function renderAdminPage(): string {
   // group discovery panel
   function loadDiscovery() {
     $("grpManualBot").innerHTML = botOptions(0, false);
-    $("discRows").innerHTML = '<tr class="empty"><td colspan="4">Loading groups from WhatsApp…</td></tr>';
+    $("discRows").innerHTML = '<tr class="empty"><td colspan="5">Loading groups from WhatsApp…</td></tr>';
     apiJson("discover/groups").then(function (j) {
       j.groups.forEach(function (g) { groupNames[g.jid] = g.subject; });
       loadGroups(); // now we have names
       var un = j.groups.filter(function (g) { return !g.allowlisted; });
       $("discRows").innerHTML = un.length ? un.map(function (g) {
-        return '<tr data-jid="' + esc(g.jid) + '"><td>' + esc(g.subject || "Untitled group") + '<span class="sub mono">' + esc(g.jid) + '</span></td><td class="num hide-sm">' + g.size + '</td><td class="num"><select data-role="bot">' + botOptions(0, false) + '</select></td><td class="actions"><button data-role="add">Add</button></td></tr>';
-      }).join("") : '<tr class="empty"><td colspan="4">Every group this number is in is already listed.</td></tr>';
+        return '<tr data-jid="' + esc(g.jid) + '"><td>' + esc(g.subject || "Untitled group") + '<span class="sub mono">' + esc(g.jid) + '</span></td><td class="num hide-sm">' + g.size + '</td><td class="num"><select data-role="bot">' + botOptions(0, false) + '</select></td><td class="num"><select data-role="lvl"><option value="1">Lvl 1</option><option value="2">Lvl 2</option></select></td><td class="actions"><button data-role="add">Add</button></td></tr>';
+      }).join("") : '<tr class="empty"><td colspan="5">Every group this number is in is already listed.</td></tr>';
     }).catch(function (e) {
-      $("discRows").innerHTML = '<tr class="empty"><td colspan="4">' + (e.code === "socket_not_open" ? "WhatsApp isn't connected, so groups can't be listed. Paste a JID above instead." : "Couldn't list groups: " + esc(e.message)) + '</td></tr>';
+      $("discRows").innerHTML = '<tr class="empty"><td colspan="5">' + (e.code === "socket_not_open" ? "WhatsApp isn't connected, so groups can't be listed. Paste a JID above instead." : "Couldn't list groups: " + esc(e.message)) + '</td></tr>';
     });
   }
   $("discRows").addEventListener("click", function (ev) {
     var t = ev.target; if (t.getAttribute("data-role") !== "add") return;
-    var tr = t.closest("tr"), jid = tr.getAttribute("data-jid"), bot = Number(tr.querySelector("select").value);
+    var tr = t.closest("tr"), jid = tr.getAttribute("data-jid");
+    var bot = Number(tr.querySelector('select[data-role="bot"]').value);
+    var lvl = Number(tr.querySelector('select[data-role="lvl"]').value);
     t.disabled = true;
-    apiJson("groups", { method: "POST", body: { jid: jid, botNumber: bot } }).then(function () { flash("grpAddMsg", "Added.", "ok"); tr.remove(); loadGroups(); }).catch(function (e) { flash("grpAddMsg", e.message, "err"); t.disabled = false; });
+    apiJson("groups", { method: "POST", body: { jid: jid, botNumber: bot, level: lvl } }).then(function () { flash("grpAddMsg", "Added.", "ok"); tr.remove(); loadGroups(); loadAudit(); }).catch(function (e) { flash("grpAddMsg", e.message, "err"); t.disabled = false; });
   });
   $("grpManualAdd").onclick = function () {
     var jid = $("grpManual").value.trim(); if (!jid) return;
-    apiJson("groups", { method: "POST", body: { jid: jid, botNumber: Number($("grpManualBot").value) } }).then(function () { flash("grpAddMsg", "Added.", "ok"); $("grpManual").value = ""; loadGroups(); }).catch(function (e) { flash("grpAddMsg", e.message, "err"); });
+    var bot = Number($("grpManualBot").value);
+    var lvl = Number($("grpManualLvl").value);
+    apiJson("groups", { method: "POST", body: { jid: jid, botNumber: bot, level: lvl } }).then(function () { flash("grpAddMsg", "Added.", "ok"); $("grpManual").value = ""; loadGroups(); loadAudit(); }).catch(function (e) { flash("grpAddMsg", e.message, "err"); });
   };
   $("addGroupBtn").onclick = function () { $("addGroupPanel").classList.toggle("hidden"); if (!$("addGroupPanel").classList.contains("hidden")) loadDiscovery(); };
   $("addGroupClose").onclick = function () { $("addGroupPanel").classList.add("hidden"); };
@@ -433,7 +540,9 @@ export function renderAdminPage(): string {
   $("addChatClose").onclick = function () { $("addChatPanel").classList.add("hidden"); };
   $("chatAdd").onclick = function () {
     var n = $("chatNum").value.trim(); if (!n) return;
-    apiJson("chats", { method: "POST", body: { jid: n, botNumber: Number($("chatBot").value) } }).then(function (j) { flash("chatAddMsg", "Added " + phone(j.jid) + ".", "ok"); $("chatNum").value = ""; loadChats(); }).catch(function (e) { flash("chatAddMsg", e.message, "err"); });
+    var bot = Number($("chatBot").value);
+    var lvl = Number($("chatLvl").value);
+    apiJson("chats", { method: "POST", body: { jid: n, botNumber: bot, level: lvl } }).then(function (j) { flash("chatAddMsg", "Added " + phone(j.jid) + ".", "ok"); $("chatNum").value = ""; loadChats(); loadAudit(); }).catch(function (e) { flash("chatAddMsg", e.message, "err"); });
   };
   $("chatNum").onkeydown = function (e) { if (e.key === "Enter") $("chatAdd").click(); };
 
@@ -463,10 +572,54 @@ export function renderAdminPage(): string {
     apiJson("keys/" + id, { method: "DELETE" }).then(function () { flash("kMsg", "Revoked.", "ok"); loadKeys(); }).catch(function (e) { flash("kMsg", e.message, "err"); });
   });
 
+  // ── audit logs & restore ─────────────────────────────────────────
+  function loadAudit() {
+    apiJson("audit").then(function (j) {
+      var logs = j.logs || [];
+      $("auditCount").textContent = logs.length ? logs.length : "";
+      $("auditRows").innerHTML = logs.length ? logs.map(function (l) {
+        var canRestore = (l.action === "delete_group" || l.action === "delete_chat") && l.details && l.details.jid;
+        var detailsStr = "";
+        if (l.details) {
+          var parts = [];
+          if (l.details.jid) parts.push("JID: " + phone(l.details.jid));
+          if (l.details.botNumber != null) parts.push("Bot: " + l.details.botNumber);
+          if (l.details.level != null) parts.push("Lvl: " + l.details.level);
+          if (l.details.updated) parts.push("Changed: " + l.details.updated.join(", "));
+          detailsStr = parts.join(" | ") || JSON.stringify(l.details);
+        }
+        var restoreBtn = canRestore ? ('<button class="restore-btn" data-act="restore" data-action="' + esc(l.action) + '" data-jid="' + esc(l.details.jid) + '" data-bot="' + (l.details.botNumber || 0) + '" data-lvl="' + (l.details.level || 1) + '">Restore</button>') : "";
+        return '<tr><td><span class="badge">' + esc(l.action) + '</span></td><td>' + esc(l.target ? phone(l.target) : "—") + '</td><td class="mono muted" style="font-size:11px;">' + esc(detailsStr) + '</td><td class="hide-sm muted">' + (l.timestamp ? ago(new Date(l.timestamp).getTime()) + " ago" : "—") + '</td><td class="actions">' + restoreBtn + '</td></tr>';
+      }).join("") : '<tr class="empty"><td colspan="5">No audit logs recorded yet.</td></tr>';
+    }).catch(function (e) {
+      $("auditRows").innerHTML = '<tr class="empty"><td colspan="5">Could not load audit logs.</td></tr>';
+      flash("auditMsg", e.message, "err");
+    });
+  }
+
+  $("auditRows").addEventListener("click", function (ev) {
+    var t = ev.target; if (t.getAttribute("data-act") !== "restore") return;
+    var actType = t.getAttribute("data-action");
+    var jid = t.getAttribute("data-jid");
+    var bot = Number(t.getAttribute("data-bot") || 0);
+    var lvl = Number(t.getAttribute("data-lvl") || 1);
+    var kind = actType === "delete_group" ? "group" : "chat";
+    if (!confirm("Restore " + kind + " " + phone(jid) + " with Bot " + bot + " at Level " + lvl + "?")) return;
+    t.disabled = true;
+    apiJson("audit/restore", { method: "POST", body: { jid: jid, botNumber: bot, level: lvl, kind: kind } })
+      .then(function (j) {
+        flash("auditMsg", j.message || "Restored successfully.", "ok");
+        loadAudit();
+        if (kind === "group") loadGroups(); else loadChats();
+      })
+      .catch(function (e) { flash("auditMsg", e.message, "err"); t.disabled = false; });
+  });
+  $("refreshAuditBtn").onclick = loadAudit;
+
   // ── top bar ───────────────────────────────────────────────────────
   $("loginBtn").onclick = function () { token = $("tok").value.trim(); if (!token) return; sessionStorage.setItem(KEY, token); showApp(); };
   $("tok").addEventListener("keydown", function (e) { if (e.key === "Enter") $("loginBtn").click(); });
-  $("refreshBtn").onclick = function () { refresh(); loadGroups(); loadChats(); loadKeys(); };
+  $("refreshBtn").onclick = function () { refresh(); loadGroups(); loadChats(); loadKeys(); loadAudit(); };
   $("restartBtn").onclick = function () { act("restart", "Restart the bot? WhatsApp reconnects in about 20 seconds."); };
   $("relinkBtn").onclick = function () { act("relink", "Unlink this phone and wipe the session? You'll scan a new QR code here afterwards."); };
   $("logoutBtn").onclick = function () { sessionStorage.removeItem(KEY); token = ""; showLogin(); };
