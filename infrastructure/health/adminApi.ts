@@ -146,7 +146,7 @@ async function handleAllowlist(
           };
         });
       } else {
-        const names = await redis.hgetall("contact_names").catch(() => ({}));
+        const names: Record<string, string> = (await redis.hgetall("contact_names").catch(() => null)) || {};
         items = items.map((item) => ({
           ...item,
           name: names[item.jid] || item.name || null,
