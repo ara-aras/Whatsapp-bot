@@ -433,13 +433,23 @@ export function renderAdminPage(): string {
   }
 
   // ── allowlists ────────────────────────────────────────────────────
+  // ── allowlists ────────────────────────────────────────────────────
   function rowFor(kind, e) {
     var label = kind === "groups" ? (e.name || groupNames[e.jid] || "Group") : (e.name || phone(e.jid));
     var sub = e.jid;
-    var lvlOpt = '<select data-act="lvl" aria-label="Level for ' + esc(label) + '">' +
-      '<option value="1"' + (e.level === 2 ? "" : " selected") + '>Lvl 1 (Community)</option>' +
-      '<option value="2"' + (e.level === 2 ? " selected" : "") + '>Lvl 2 (Live Search)</option>' +
-      '</select>';
+    var isDkb = e.botNumber === 2;
+    var lvlOpt;
+    if (isDkb) {
+      lvlOpt = '<select data-act="lvl" aria-label="Level for ' + esc(label) + '">' +
+        '<option value="1"' + (e.level === 2 ? "" : " selected") + '>Lvl 1 (Community)</option>' +
+        '<option value="2"' + (e.level === 2 ? " selected" : "") + '>Lvl 2 (Live Search)</option>' +
+        '</select>';
+    } else {
+      var botTag = e.botNumber === 3 ? "Mahoraga" : (e.botNumber === 1 ? "ECB" : "Generic");
+      lvlOpt = '<select data-act="lvl" disabled title="Level 2 is only available for DKB at the moment" aria-label="Level for ' + esc(label) + '">' +
+        '<option value="1" selected>Lvl 1 (' + botTag + ')</option>' +
+        '</select>';
+    }
 
     if (kind === "groups") {
       var actHtml = e.lastActive ?
@@ -484,7 +494,10 @@ export function renderAdminPage(): string {
     $(rowsId).addEventListener("change", function (ev) {
       var t = ev.target, tr = t.closest("tr"); if (!tr) return; var id = tr.getAttribute("data-id");
       if (t.getAttribute("data-act") === "bot") {
-        apiJson(kind + "/" + id, { method: "PATCH", body: { botNumber: Number(t.value) } }).then(function () { flash(msgId, "Bot changed.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
+        var newBot = Number(t.value);
+        var patchBody = { botNumber: newBot };
+        if (newBot !== 2) patchBody.level = 1;
+        apiJson(kind + "/" + id, { method: "PATCH", body: patchBody }).then(function () { flash(msgId, "Bot changed.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
       }
       if (t.getAttribute("data-act") === "lvl") {
         apiJson(kind + "/" + id, { method: "PATCH", body: { level: Number(t.value) } }).then(function () { flash(msgId, "Level changed.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
@@ -506,42 +519,74 @@ export function renderAdminPage(): string {
   // group discovery panel
   function loadDiscovery() {
     $("grpManualBot").innerHTML = botOptions(0, false);
+    var isManDkb = Number($("grpManualBot").value) === 2;
+    $("grpManualLvl").disabled = !isManDkb;
+    if (!isManDkb) $("grpManualLvl").value = "1";
+
     $("discRows").innerHTML = '<tr class="empty"><td colspan="5">Loading groups from WhatsApp…</td></tr>';
     apiJson("discover/groups").then(function (j) {
       j.groups.forEach(function (g) { groupNames[g.jid] = g.subject; });
       loadGroups(); // now we have names
       var un = j.groups.filter(function (g) { return !g.allowlisted; });
       $("discRows").innerHTML = un.length ? un.map(function (g) {
-        return '<tr data-jid="' + esc(g.jid) + '"><td>' + esc(g.subject || "Untitled group") + '<span class="sub mono">' + esc(g.jid) + '</span></td><td class="num hide-sm">' + g.size + '</td><td class="num"><select data-role="bot">' + botOptions(0, false) + '</select></td><td class="num"><select data-role="lvl"><option value="1">Lvl 1</option><option value="2">Lvl 2</option></select></td><td class="actions"><button data-role="add">Add</button></td></tr>';
+        return '<tr data-jid="' + esc(g.jid) + '"><td>' + esc(g.subject || "Untitled group") + '<span class="sub mono">' + esc(g.jid) + '</span></td><td class="num hide-sm">' + g.size + '</td><td class="num"><select data-role="bot">' + botOptions(0, false) + '</select></td><td class="num"><select data-role="lvl" disabled><option value="1">Lvl 1</option></select></td><td class="actions"><button data-role="add">Add</button></td></tr>';
       }).join("") : '<tr class="empty"><td colspan="5">Every group this number is in is already listed.</td></tr>';
     }).catch(function (e) {
       $("discRows").innerHTML = '<tr class="empty"><td colspan="5">' + (e.code === "socket_not_open" ? "WhatsApp isn't connected, so groups can't be listed. Paste a JID above instead." : "Couldn't list groups: " + esc(e.message)) + '</td></tr>';
     });
   }
+  $("discRows").addEventListener("change", function (ev) {
+    var t = ev.target; if (t.getAttribute("data-role") !== "bot") return;
+    var tr = t.closest("tr"); if (!tr) return;
+    var lvlSel = tr.querySelector('select[data-role="lvl"]');
+    if (lvlSel) {
+      var isDkb = Number(t.value) === 2;
+      lvlSel.disabled = !isDkb;
+      lvlSel.innerHTML = isDkb ? '<option value="1">Lvl 1</option><option value="2">Lvl 2</option>' : '<option value="1">Lvl 1</option>';
+      lvlSel.value = "1";
+    }
+  });
   $("discRows").addEventListener("click", function (ev) {
     var t = ev.target; if (t.getAttribute("data-role") !== "add") return;
     var tr = t.closest("tr"), jid = tr.getAttribute("data-jid");
     var bot = Number(tr.querySelector('select[data-role="bot"]').value);
-    var lvl = Number(tr.querySelector('select[data-role="lvl"]').value);
+    var lvl = bot === 2 ? Number(tr.querySelector('select[data-role="lvl"]').value) : 1;
     t.disabled = true;
     apiJson("groups", { method: "POST", body: { jid: jid, botNumber: bot, level: lvl } }).then(function () { flash("grpAddMsg", "Added.", "ok"); tr.remove(); loadGroups(); loadAudit(); }).catch(function (e) { flash("grpAddMsg", e.message, "err"); t.disabled = false; });
   });
+  $("grpManualBot").onchange = function () {
+    var isDkb = Number(this.value) === 2;
+    $("grpManualLvl").disabled = !isDkb;
+    if (!isDkb) $("grpManualLvl").value = "1";
+  };
   $("grpManualAdd").onclick = function () {
     var jid = $("grpManual").value.trim(); if (!jid) return;
     var bot = Number($("grpManualBot").value);
-    var lvl = Number($("grpManualLvl").value);
+    var lvl = bot === 2 ? Number($("grpManualLvl").value) : 1;
     apiJson("groups", { method: "POST", body: { jid: jid, botNumber: bot, level: lvl } }).then(function () { flash("grpAddMsg", "Added.", "ok"); $("grpManual").value = ""; loadGroups(); loadAudit(); }).catch(function (e) { flash("grpAddMsg", e.message, "err"); });
   };
   $("addGroupBtn").onclick = function () { $("addGroupPanel").classList.toggle("hidden"); if (!$("addGroupPanel").classList.contains("hidden")) loadDiscovery(); };
   $("addGroupClose").onclick = function () { $("addGroupPanel").classList.add("hidden"); };
 
   // chats panel
-  $("addChatBtn").onclick = function () { $("chatBot").innerHTML = botOptions(0, false); $("addChatPanel").classList.toggle("hidden"); $("chatNum").focus(); };
+  $("addChatBtn").onclick = function () {
+    $("chatBot").innerHTML = botOptions(0, false);
+    var isDkb = Number($("chatBot").value) === 2;
+    $("chatLvl").disabled = !isDkb;
+    if (!isDkb) $("chatLvl").value = "1";
+    $("addChatPanel").classList.toggle("hidden");
+    $("chatNum").focus();
+  };
+  $("chatBot").onchange = function () {
+    var isDkb = Number(this.value) === 2;
+    $("chatLvl").disabled = !isDkb;
+    if (!isDkb) $("chatLvl").value = "1";
+  };
   $("addChatClose").onclick = function () { $("addChatPanel").classList.add("hidden"); };
   $("chatAdd").onclick = function () {
     var n = $("chatNum").value.trim(); if (!n) return;
     var bot = Number($("chatBot").value);
-    var lvl = Number($("chatLvl").value);
+    var lvl = bot === 2 ? Number($("chatLvl").value) : 1;
     apiJson("chats", { method: "POST", body: { jid: n, botNumber: bot, level: lvl } }).then(function (j) { flash("chatAddMsg", "Added " + phone(j.jid) + ".", "ok"); $("chatNum").value = ""; loadChats(); loadAudit(); }).catch(function (e) { flash("chatAddMsg", e.message, "err"); });
   };
   $("chatNum").onkeydown = function (e) { if (e.key === "Enter") $("chatAdd").click(); };

@@ -145,14 +145,20 @@ describe("allowlist CRUD", () => {
     expect(r2.json.updated).toEqual(["enabled"]);
     expect(groups.list().find((g) => g.id === 2)!.enabled).toBe(true);
 
-    const r3 = await call("/admin/api/groups/1", { method: "PATCH", body: { botNumber: 3 } });
-    expect(r3.json.updated).toEqual([]); // no-op is fine, not an error
+    const r3 = await call("/admin/api/groups/1", { method: "PATCH", body: { botNumber: 2 } });
+    expect(r3.status).toBe(200);
 
     const r4 = await call("/admin/api/groups/1", { method: "PATCH", body: { level: 2 } });
     expect(r4.status).toBe(200);
     expect(r4.json.updated).toEqual(["level"]);
     expect(r4.json.entry.level).toBe(2);
     expect(groups.list().find((g) => g.id === 1)!.level).toBe(2);
+
+    // Switching away from DKB (2) to MAHORAGA (3) clamps level back to 1
+    const r5 = await call("/admin/api/groups/1", { method: "PATCH", body: { botNumber: 3 } });
+    expect(r5.status).toBe(200);
+    expect(r5.json.entry.level).toBe(1);
+    expect(groups.list().find((g) => g.id === 1)!.level).toBe(1);
   });
 
   it("adds a group with specific level", async () => {

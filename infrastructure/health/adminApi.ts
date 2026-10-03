@@ -184,7 +184,7 @@ async function handleAllowlist(
       return;
     }
     const lvlRaw = body.level !== undefined ? Number(body.level) : 1;
-    const level = lvlRaw === 2 ? 2 : 1;
+    const level = (botNumber === 2 && lvlRaw === 2) ? 2 : 1;
     const ok = await list.add(jid, botNumber, level);
     json(res, ok ? 201 : 500, ok ? { added: true, jid, botNumber, level } : { error: "add_failed" });
     return;
@@ -218,29 +218,37 @@ async function handleAllowlist(
         return;
       }
       if (bot !== entry.botNumber) {
-        const curLvl = entry.level ?? 1;
-        if (!(await list.setBot(id, bot, curLvl))) {
+        // If switching to non-DKB bot, level must revert to 1
+        const newLvl = bot === 2 ? (body.level !== undefined ? Number(body.level) : (entry.level ?? 1)) : 1;
+        if (!(await list.setBot(id, bot, newLvl))) {
           json(res, 500, { error: "update_failed", field: "botNumber" });
           return;
         }
         changes.push("botNumber");
+        if (newLvl !== (entry.level ?? 1)) {
+          changes.push("level");
+        }
       }
     }
     if (body.level !== undefined) {
-      const lvl = Number(body.level);
+      let lvl = Number(body.level);
       if (lvl !== 1 && lvl !== 2) {
         json(res, 400, { error: "bad_request", detail: "level must be 1 or 2" });
         return;
       }
+      const targetBot = body.botNumber !== undefined ? parseBot(body.botNumber) : entry.botNumber;
+      if (targetBot !== 2) {
+        lvl = 1; // Non-DKB bots currently remain Level 1
+      }
       if (lvl !== (entry.level ?? 1)) {
         const setLevelFn = list.setLevel
           ? list.setLevel.bind(list)
-          : (i: number, l: number) => list.setBot(i, entry.botNumber, l);
+          : (i: number, l: number) => list.setBot(i, targetBot ?? entry.botNumber, l);
         if (!(await setLevelFn(id, lvl))) {
           json(res, 500, { error: "update_failed", field: "level" });
           return;
         }
-        changes.push("level");
+        if (!changes.includes("level")) changes.push("level");
       }
     }
     if (body.enabled !== undefined) {
