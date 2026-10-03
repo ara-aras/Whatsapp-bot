@@ -163,33 +163,21 @@ export function renderAdminPage(): string {
     pointer-events:none;
     z-index:0;
     overflow:hidden;
+    display:flex;
+    justify-content:center;
   }
-  .bg-wheel-art {
+  .bg-mahoraga-stare {
     position:absolute;
-    top:-60px;
-    right:-80px;
-    width:700px;
-    height:700px;
-    background:url('/admin/asset/mahoraga_wheel.jpg') center/cover no-repeat;
-    opacity:0.18;
-    border-radius:50%;
-    filter:drop-shadow(0 0 60px rgba(56, 189, 248, 0.4));
-    mask-image:radial-gradient(circle at center, black 38%, transparent 74%);
-    -webkit-mask-image:radial-gradient(circle at center, black 38%, transparent 74%);
-    animation:slowWheel 140s linear infinite;
-  }
-  .bg-character-art {
-    position:absolute;
-    bottom:-100px;
-    left:-60px;
-    width:420px;
-    height:640px;
-    background:url('/admin/asset/mahoraga_character.png') center/contain no-repeat;
-    opacity:0.06;
-    pointer-events:none;
-    filter:grayscale(100%) contrast(150%);
-    mask-image:linear-gradient(to top, black 50%, transparent 95%);
-    -webkit-mask-image:linear-gradient(to top, black 50%, transparent 95%);
+    top:0;
+    left:50%;
+    transform:translateX(-50%);
+    width:min(960px, 95vw);
+    height:100vh;
+    background:url('/admin/asset/mahoraga_stare.jpg') top center / contain no-repeat;
+    opacity:0.24;
+    filter:contrast(125%) brightness(95%);
+    mask-image:radial-gradient(ellipse 75% 85% at 50% 35%, black 45%, transparent 95%);
+    -webkit-mask-image:radial-gradient(ellipse 75% 85% at 50% 35%, black 45%, transparent 95%);
   }
   .bg-watermark-kanji {
     position:absolute;
@@ -203,10 +191,6 @@ export function renderAdminPage(): string {
     user-select:none;
     line-height:1;
     pointer-events:none;
-  }
-  @keyframes slowWheel {
-    from { transform:rotate(0deg); }
-    to { transform:rotate(360deg); }
   }
 
   .wrap { max-width:1120px; margin:0 auto; padding:0 24px 80px; position:relative; z-index:1; }
@@ -368,8 +352,7 @@ export function renderAdminPage(): string {
 </head>
 <body>
 <div class="bg-atmosphere" aria-hidden="true">
-  <div class="bg-wheel-art"></div>
-  <div class="bg-character-art"></div>
+  <div class="bg-mahoraga-stare"></div>
   <div class="bg-watermark-kanji">魔虚羅</div>
 </div>
 
