@@ -22,13 +22,11 @@ export interface CommandConfig {
   handler: CommandHandler;
 }
 
-var registry: Map<string, CommandConfig> | null = null;
-
 function getRegistry(): Map<string, CommandConfig> {
-  if (!registry) {
-    registry = new Map<string, CommandConfig>();
+  if (!(globalThis as any).__commandRegistry) {
+    (globalThis as any).__commandRegistry = new Map<string, CommandConfig>();
   }
-  return registry;
+  return (globalThis as any).__commandRegistry;
 }
 
 export function registerCommand(config: CommandConfig) {

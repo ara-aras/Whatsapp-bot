@@ -48,41 +48,124 @@ registerCommand({
 });
 
 // Resolves which allowlisted group/chat a command targets: an explicit
-// -gid/-cid id, else the current chat/group the command was sent in.
+// -g/-gid or -c/-cid (id or jid), positional id/jid, else the current chat/group.
 type ResolvedTarget =
   | { ok: true; type: "group" | "chat"; entry: { id: number; jid: string; botNumber: number; level: number } }
   | { ok: false; msg: string };
 
 function resolveTarget(ctx: any): ResolvedTarget {
-  const joined = ctx.cmdArgs.join(" ");
-  const g = joined.match(/-gid\s+(\d+)/i);
-  const c = joined.match(/-cid\s+(\d+)/i);
-  if (g && c) return { ok: false, msg: "Specify only one of -gid / -cid." };
-  if (g) {
-    const id = parseInt(g[1], 10);
-    const entry = groupConfig.getGroupEntryById(id);
-    return entry
-      ? { ok: true, type: "group", entry }
-      : { ok: false, msg: `No group found with ID ${id}.` };
+  const rawArgs = [...ctx.cmdArgs];
+  const joined = rawArgs.join(" ");
+
+  // Check for mutual exclusivity of group vs chat
+  const hasGroupFlag = /(?:^|\s)-(?:gid|g)(?:\s+|$)/i.test(joined);
+  const hasChatFlag = /(?:^|\s)-(?:cid|c)(?:\s+|$)/i.test(joined);
+  if (hasGroupFlag && hasChatFlag) {
+    return { ok: false, msg: "Specify only one of -g/-gid or -c/-cid." };
   }
-  if (c) {
-    const id = parseInt(c[1], 10);
-    const entry = chatConfig.getChatEntryById(id);
-    return entry
-      ? { ok: true, type: "chat", entry }
-      : { ok: false, msg: `No chat found with ID ${id}.` };
+
+  // 1. Group target via -gid <val> or -g [val]
+  if (hasGroupFlag) {
+    const m = joined.match(/-(?:gid|g)(?:\s+([^\s]+))?/i);
+    const val = m && m[1] && !m[1].startsWith("-") ? m[1].trim() : "";
+
+    if (val) {
+      const id = parseInt(val, 10);
+      let entry = !isNaN(id) ? groupConfig.getGroupEntryById(id) : null;
+      if (!entry) {
+        entry = groupConfig.getGroupEntryByJid(val) || groupConfig.getGroupEntryByJid(normalizeJid(val) as string);
+      }
+      if (entry) {
+        return { ok: true, type: "group", entry };
+      }
+      return {
+        ok: false,
+        msg: `No group found with ID or JID "${val}". Use !listgroups to see valid group IDs.`,
+      };
+    }
+
+    // Bare -g without a value targets the current group
+    if (ctx.from.endsWith("@g.us")) {
+      const entry = groupConfig.getGroupEntryByJid(ctx.from);
+      return entry
+        ? { ok: true, type: "group", entry }
+        : { ok: false, msg: "This group isn't in the allowlist. Add it with !add -g." };
+    }
+    return { ok: false, msg: "Pass a group ID or JID with -g <id|jid> (e.g. -g 6)." };
   }
-  // Infer the current chat/group.
+
+  // 2. Chat target via -cid <val> or -c [val]
+  if (hasChatFlag) {
+    const m = joined.match(/-(?:cid|c)(?:\s+([^\s]+))?/i);
+    const val = m && m[1] && !m[1].startsWith("-") ? m[1].trim() : "";
+
+    if (val) {
+      const id = parseInt(val, 10);
+      let entry = !isNaN(id) ? chatConfig.getChatEntryById(id) : null;
+      if (!entry) {
+        entry = chatConfig.getChatEntryByJid(val) || chatConfig.getChatEntryByJid(normalizeJid(val) as string);
+      }
+      if (entry) {
+        return { ok: true, type: "chat", entry };
+      }
+      return {
+        ok: false,
+        msg: `No chat found with ID or JID "${val}". Use !listchats to see valid chat IDs.`,
+      };
+    }
+
+    // Bare -c without a value targets the current chat
+    if (!ctx.from.endsWith("@g.us")) {
+      const entry = chatConfig.getChatEntryByJid(ctx.from);
+      return entry
+        ? { ok: true, type: "chat", entry }
+        : { ok: false, msg: "This chat isn't in the allowlist. Add it with !add -c." };
+    }
+    return { ok: false, msg: "Pass a chat ID or JID with -c <id|jid> (e.g. -c 1)." };
+  }
+
+  // 3. Positional ID or JID (e.g. !rm 9 or !edit 6 -lvl 2)
+  for (let i = 0; i < rawArgs.length; i++) {
+    const prev = (rawArgs[i - 1] || "").toLowerCase();
+    const curr = rawArgs[i];
+    if (prev === "-bid" || prev === "-lvl") continue;
+    if (curr.startsWith("-")) continue;
+
+    const id = parseInt(curr, 10);
+    if (!isNaN(id)) {
+      const g = groupConfig.getGroupEntryById(id);
+      if (g) return { ok: true, type: "group", entry: g };
+      const c = chatConfig.getChatEntryById(id);
+      if (c) return { ok: true, type: "chat", entry: c };
+      return {
+        ok: false,
+        msg: `No group or chat found with ID ${id}. Use !listgroups or !listchats to view IDs.`,
+      };
+    }
+
+    if (curr.includes("@")) {
+      const g = groupConfig.getGroupEntryByJid(curr);
+      if (g) return { ok: true, type: "group", entry: g };
+      const c = chatConfig.getChatEntryByJid(curr);
+      if (c) return { ok: true, type: "chat", entry: c };
+      return {
+        ok: false,
+        msg: `No group or chat found with JID "${curr}".`,
+      };
+    }
+  }
+
+  // 4. Infer current chat or group
   if (ctx.from.endsWith("@g.us")) {
     const entry = groupConfig.getGroupEntryByJid(ctx.from);
     return entry
       ? { ok: true, type: "group", entry }
-      : { ok: false, msg: "This group isn't in the allowlist. Add it with !add, or target one with -gid <id>." };
+      : { ok: false, msg: "This group isn't in the allowlist. Add it with !add, or target one with -g <id>." };
   }
   const entry = chatConfig.getChatEntryByJid(ctx.from);
   return entry
     ? { ok: true, type: "chat", entry }
-    : { ok: false, msg: "This chat isn't in the allowlist. Add it with !add, or target one with -cid <id>." };
+    : { ok: false, msg: "This chat isn't in the allowlist. Add it with !add, or target one with -c <id>." };
 }
 
 // ── ADD (!add [-g|-c] [jid] [-bid <0-3>] [-lvl <1|2>]) ──
@@ -170,40 +253,48 @@ registerCommand({
   },
 });
 
-// ── RM (!rm — this chat/group, or -gid/-cid <id>) — confirm via !YES ──
+// ── RM / DELETE (!rm / !delete — this chat/group, or -g/-c/-gid/-cid <id|jid>) — confirm via !YES ──
+const rmHandler = async (ctx: any) => {
+  const t = resolveTarget(ctx);
+  if (!t.ok) {
+    await sendBotReply(
+      ctx.sock,
+      ctx.from,
+      `${t.msg}\nUsage: !rm (in the chat/group) | !rm -g <id> | !rm -c <id>`,
+    );
+    return;
+  }
+  const { id, jid, botNumber } = t.entry;
+  if (t.type === "group") {
+    const name = await safeGetGroupName(ctx.sock, jid);
+    ctx.session.pendingDeleteGroup = { id, jid, botNumber };
+    await sendBotReply(
+      ctx.sock,
+      ctx.from,
+      `Remove Group ID: ${id} | Name: ${name} | JID: ${jid} | Bot: ${botNumber} (${botLabel(botNumber)})?\n(Enter !YES to confirm)`,
+    );
+  } else {
+    const name = await safeGetContactName(jid);
+    ctx.session.pendingDeleteChat = { id, jid, botNumber };
+    await sendBotReply(
+      ctx.sock,
+      ctx.from,
+      `Remove Chat ID: ${id} | Name: ${name} | JID: ${jid} | Bot: ${botNumber} (${botLabel(botNumber)})?\n(Enter !YES to confirm)`,
+    );
+  }
+  await saveSession(buildSessionKey(ctx.from, ctx.senderId), ctx.session);
+};
+
 registerCommand({
   name: "rm",
   requiresAdmin: true,
-  handler: async (ctx) => {
-    const t = resolveTarget(ctx);
-    if (!t.ok) {
-      await sendBotReply(
-        ctx.sock,
-        ctx.from,
-        `${t.msg}\nUsage: !rm (in the chat/group) | !rm -gid <id> | !rm -cid <id>`,
-      );
-      return;
-    }
-    const { id, jid, botNumber } = t.entry;
-    if (t.type === "group") {
-      const name = await safeGetGroupName(ctx.sock, jid);
-      ctx.session.pendingDeleteGroup = { id, jid, botNumber };
-      await sendBotReply(
-        ctx.sock,
-        ctx.from,
-        `Remove Group ID: ${id} | Name: ${name} | JID: ${jid} | Bot: ${botNumber} (${botLabel(botNumber)})?\n(Enter !YES to confirm)`,
-      );
-    } else {
-      const name = await safeGetContactName(jid);
-      ctx.session.pendingDeleteChat = { id, jid, botNumber };
-      await sendBotReply(
-        ctx.sock,
-        ctx.from,
-        `Remove Chat ID: ${id} | Name: ${name} | JID: ${jid} | Bot: ${botNumber} (${botLabel(botNumber)})?\n(Enter !YES to confirm)`,
-      );
-    }
-    await saveSession(buildSessionKey(ctx.from, ctx.senderId), ctx.session);
-  },
+  handler: rmHandler,
+});
+
+registerCommand({
+  name: "delete",
+  requiresAdmin: true,
+  handler: rmHandler,
 });
 
 // ── EDIT (!edit [-bid <n>] [-lvl <n>] — this chat/group, or -gid/-cid <id> [-bid <n>] [-lvl <n>]) ──
@@ -218,7 +309,7 @@ registerCommand({
       await sendBotReply(
         ctx.sock,
         ctx.from,
-        "Usage: !edit [-bid <0-3>] [-lvl <1|2>] (in chat/group) | !edit -gid <id> [-bid <n>] [-lvl <n>] | !edit -cid <id> [-bid <n>] [-lvl <n>]",
+        "Usage: !edit [-bid <0-3>] [-lvl <1|2>] (in chat/group) | !edit -g <id> [-bid <n>] [-lvl <n>] | !edit -c <id> [-bid <n>] [-lvl <n>]",
       );
       return;
     }
@@ -279,7 +370,7 @@ async function setAllowlistEnabled(ctx: any, enabled: boolean): Promise<void> {
     await sendBotReply(
       ctx.sock,
       ctx.from,
-      `${t.msg}\nUsage: !${verb} (in the chat/group) | !${verb} -gid <id> | !${verb} -cid <id>`,
+      `${t.msg}\nUsage: !${verb} (in the chat/group) | !${verb} -g <id> | !${verb} -c <id>`,
     );
     return;
   }

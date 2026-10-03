@@ -539,6 +539,7 @@ async function processInboundMessage(
     let cmdName = (parts[0] || "").toLowerCase();
     if (cmdName === "listgroup") cmdName = "listgroups";
     if (cmdName === "listchat") cmdName = "listchats";
+    if (cmdName === "delete") cmdName = "rm";
     const cmdArgs = parts.slice(1);
 
     // ── INTERCEPT AND ROUTE VIA COMMAND DISPATCHER REGISTRY ──
@@ -620,6 +621,7 @@ async function processInboundMessage(
         "whoami",
         "add",
         "rm",
+        "delete",
         "edit",
         "enable",
         "disable",

@@ -195,10 +195,17 @@ async function addGroup(
   ensureLoaded();
 
   try {
-    const { addAllowedGroup } = await import("../storage/core/allowlistRepository");
+    const { addAllowedGroup, getAllowedGroups } = await import("../storage/core/allowlistRepository");
     const ok = await addAllowedGroup(jid, botNumber, level);
     if (ok) {
-      await init();
+      const dbRows = await getAllowedGroups();
+      allowedGroups = dbRows.map((e) => ({
+        id: e.id,
+        jid: e.jid,
+        botNumber: e.bot_number,
+        level: e.level ?? 1,
+        enabled: e.enabled,
+      }));
       saveToFile(allowedGroups!);
       return true;
     }
@@ -232,12 +239,7 @@ async function removeGroupById(id: number): Promise<boolean> {
 
   try {
     const { removeAllowedGroupById } = await import("../storage/core/allowlistRepository");
-    const ok = await removeAllowedGroupById(id);
-    if (ok) {
-      await init();
-      saveToFile(allowedGroups!);
-      return true;
-    }
+    await removeAllowedGroupById(id);
   } catch (error) {
     console.warn(`⚠️ Failed to persist removed group ID ${id} from DB:`, error);
   }
@@ -245,10 +247,9 @@ async function removeGroupById(id: number): Promise<boolean> {
   const index = allowedGroups!.findIndex((g) => g.id === id);
   if (index !== -1) {
     allowedGroups!.splice(index, 1);
-    saveToFile(allowedGroups!);
-    return true;
   }
-  return false;
+  saveToFile(allowedGroups!);
+  return true;
 }
 
 async function editGroupBot(id: number, botNumber: number, level?: number): Promise<boolean> {
@@ -261,12 +262,7 @@ async function editGroupBot(id: number, botNumber: number, level?: number): Prom
 
   try {
     const { setGroupBotNumber } = await import("../storage/core/allowlistRepository");
-    const ok = await setGroupBotNumber(id, botNumber, targetLevel);
-    if (ok) {
-      await init();
-      saveToFile(allowedGroups!);
-      return true;
-    }
+    await setGroupBotNumber(id, botNumber, targetLevel);
   } catch (error) {
     console.warn(`⚠️ Failed to persist edit group bot ID ${id} to DB:`, error);
   }
@@ -286,12 +282,7 @@ async function setGroupEnabled(id: number, enabled: boolean): Promise<boolean> {
 
   try {
     const { setGroupEnabled: dbSetEnabled } = await import("../storage/core/allowlistRepository");
-    const ok = await dbSetEnabled(id, enabled);
-    if (ok) {
-      await init();
-      saveToFile(allowedGroups!);
-      return true;
-    }
+    await dbSetEnabled(id, enabled);
   } catch (error) {
     console.warn(`⚠️ Failed to persist enabled group ID ${id} state to DB:`, error);
   }

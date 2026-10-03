@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import groupConfig from "../../config/groupAllowlist";
 import chatConfig from "../../config/chatAllowlist";
 
@@ -6,6 +6,15 @@ describe("allowlistLevel", () => {
   beforeEach(async () => {
     delete process.env.ALLOWED_GROUPS;
     delete process.env.ALLOWED_CHATS;
+  });
+
+  afterAll(async () => {
+    const e1 = groupConfig.getGroupEntryByJid("120363000000000001@g.us");
+    if (e1) await groupConfig.removeGroupById(e1.id);
+    const e2 = groupConfig.getGroupEntryByJid("120363000000000002@g.us");
+    if (e2) await groupConfig.removeGroupById(e2.id);
+    const c1 = chatConfig.getChatEntryByJid("19998887777@s.whatsapp.net");
+    if (c1) await chatConfig.removeChatById(c1.id);
   });
 
   it("groupConfig defaults level to 1 if not specified", async () => {

@@ -219,10 +219,17 @@ async function addChat(
   const normalized = normalizeChatJid(jid) || jid;
 
   try {
-    const { addAllowedChat } = await import("../storage/core/allowlistRepository");
+    const { addAllowedChat, getAllowedChats } = await import("../storage/core/allowlistRepository");
     const ok = await addAllowedChat(normalized, botNumber, level);
     if (ok) {
-      await init();
+      const dbRows = await getAllowedChats();
+      allowedChats = dbRows.map((e) => ({
+        id: e.id,
+        jid: e.jid,
+        botNumber: e.bot_number,
+        level: e.level ?? 1,
+        enabled: e.enabled,
+      }));
       saveToFile(allowedChats!);
       return true;
     }
@@ -260,12 +267,7 @@ async function removeChatById(id: number): Promise<boolean> {
 
   try {
     const { removeAllowedChatById } = await import("../storage/core/allowlistRepository");
-    const ok = await removeAllowedChatById(id);
-    if (ok) {
-      await init();
-      saveToFile(allowedChats!);
-      return true;
-    }
+    await removeAllowedChatById(id);
   } catch (error) {
     console.warn(`⚠️ Failed to persist removed chat ID ${id} from DB:`, error);
   }
@@ -273,10 +275,9 @@ async function removeChatById(id: number): Promise<boolean> {
   const index = allowedChats!.findIndex((c) => c.id === id);
   if (index !== -1) {
     allowedChats!.splice(index, 1);
-    saveToFile(allowedChats!);
-    return true;
   }
-  return false;
+  saveToFile(allowedChats!);
+  return true;
 }
 
 async function editChatBot(id: number, botNumber: number, level?: number): Promise<boolean> {
@@ -289,12 +290,7 @@ async function editChatBot(id: number, botNumber: number, level?: number): Promi
 
   try {
     const { setChatBotNumber } = await import("../storage/core/allowlistRepository");
-    const ok = await setChatBotNumber(id, botNumber, targetLevel);
-    if (ok) {
-      await init();
-      saveToFile(allowedChats!);
-      return true;
-    }
+    await setChatBotNumber(id, botNumber, targetLevel);
   } catch (error) {
     console.warn(`⚠️ Failed to persist edit chat bot ID ${id} to DB:`, error);
   }
@@ -314,12 +310,7 @@ async function setChatEnabled(id: number, enabled: boolean): Promise<boolean> {
 
   try {
     const { setChatEnabled: dbSetEnabled } = await import("../storage/core/allowlistRepository");
-    const ok = await dbSetEnabled(id, enabled);
-    if (ok) {
-      await init();
-      saveToFile(allowedChats!);
-      return true;
-    }
+    await dbSetEnabled(id, enabled);
   } catch (error) {
     console.warn(`⚠️ Failed to persist enabled chat ID ${id} state to DB:`, error);
   }
