@@ -7,7 +7,7 @@ export const BOT_LABELS: Record<number, string> = {
   0: "Generic",
   1: "ECB",
   2: "DKB",
-  3: "PARAG",
+  3: "MAHORAGA",
 };
 
 export function botLabel(n: number): string {

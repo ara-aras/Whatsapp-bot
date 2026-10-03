@@ -6,15 +6,15 @@ describe("botLabel", () => {
     expect(botLabel(0)).toBe("Generic");
     expect(botLabel(1)).toBe("ECB");
     expect(botLabel(2)).toBe("DKB");
-    expect(botLabel(3)).toBe("PARAG");
+    expect(botLabel(3)).toBe("MAHORAGA");
   });
 
   it("falls back for unknown ids", () => {
     expect(botLabel(9)).toBe("Bot 9");
   });
 
-  it("Generic occupies the default slot 0 and PARAG moved to 3", () => {
+  it("Generic occupies the default slot 0 and MAHORAGA occupies slot 3", () => {
     expect(BOT_LABELS[0]).toBe("Generic");
-    expect(BOT_LABELS[3]).toBe("PARAG");
+    expect(BOT_LABELS[3]).toBe("MAHORAGA");
   });
 });

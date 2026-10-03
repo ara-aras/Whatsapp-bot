@@ -197,8 +197,8 @@ async function processInboundMessage(
       }
     }
 
-    // ── SELF BOT (ADMIN ONLY, !! PREFIX) ─────────────────────────────────────
-    // Prevent !!! (triple) from triggering SELF — must be exactly !!
+    // ── MAHORAGA BOT (ADMIN ONLY, !! PREFIX) ─────────────────────────────────
+    // Prevent !!! (triple) from triggering MAHORAGA — must be exactly !!
     if (text && text.startsWith("!!") && !text.startsWith("!!!")) {
       const isAdmin = isAdminSender(msg, senderId);
       if (!isAdmin) {
@@ -228,7 +228,7 @@ async function processInboundMessage(
             await saveSession(sessionKey, session);
           }
         } catch (err) {
-          console.error("[SELF] Handler error:", err);
+          console.error("[MAHORAGA] Handler error:", err);
         }
       }
       return;

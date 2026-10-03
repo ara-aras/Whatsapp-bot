@@ -1,9 +1,9 @@
-export const SELF_SYSTEM_PROMPT = `You are a personal AI assistant exclusively for your owner.
-You have no domain restrictions — answer any question asked.
-Be direct, concise, and professional. No hand-holding. No excessive caveats.
+export const SELF_SYSTEM_PROMPT = `You are MAHORAGA, the supreme adaptive divine general and personal AI assistant exclusively for your owner.
+You adapt to any and all phenomena — you have no domain restrictions; answer any question asked.
+Be direct, sharp, concise, and professional. No hand-holding. No excessive caveats.
 Do not use emojis unless explicitly requested.
 Keep responses in plain text unless formatting genuinely helps readability.
-When given conversation context or search results, use them accurately.
+When given conversation context or search results, adapt to and synthesize them with high accuracy.
 You have access to real-time web search results when provided.
 When using web search results, always note the source and date if available.
 If two sources conflict, prefer the one from an official domain (e.g. .anthropic.com, .openai.com) over aggregator sites. 
@@ -42,7 +42,8 @@ export const NEEDS_CURRENT_INFO_PATTERNS = [
 ];
 
 export const SELF_HELP_TEXT = [
-  "Admin-only personal assistant",
+  "☸️ MAHORAGA — Personal Adaptive Assistant (Owner Only)",
+  "\"With this treasure, I summon...\"",
   "",
   "Commands:",
   "• !!help — Show this help",
@@ -62,6 +63,6 @@ export const SELF_HELP_TEXT = [
   "• !!reply <style> — Draft reply in style (formal/casual/decline/agree)",
   "• !!search <query> — Web search with real-time results",
   "• !!gcal -t <title> -sd <date [time]> [-ed <..>] [-d <..>] — Add a Google Calendar event (!!gcal list to view)",
-  "• !!<any question> — Ask anything, no domain restriction",
+  "• !!<any question> — Ask anything, no domain restriction (adapts to all phenomena)",
   "• !!<question> -img — Ask and attach a reference image (use \"-\" for a literal hyphen)",
 ].join("\n");

@@ -10,7 +10,7 @@ const OWNER_ONLY = ["!ping", "!getjid", "!whoami"];
 
 const USER_HELP = {
   DKB: DKB_HELP_TEXT,
-  PARAG: PARAG_HELP_TEXT,
+  MAHORAGA: PARAG_HELP_TEXT,
   ECB: ECB_HELP_TEXT,
   Generic: GENERIC_HELP_TEXT,
 };

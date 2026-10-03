@@ -87,7 +87,7 @@ beforeAll(async () => {
       { jid: "111@g.us", subject: "DKB Mentors", size: 40 },
       { jid: "999@g.us", subject: "Random Chatter", size: 12 },
     ],
-    botLabels: () => ({ 0: "Generic", 1: "ECB", 2: "DKB", 3: "PARAG" }),
+    botLabels: () => ({ 0: "Generic", 1: "ECB", 2: "DKB", 3: "MAHORAGA" }),
     normalizeJid: (j) => (/^\d+$/.test(j) ? `${j}@s.whatsapp.net` : j),
   });
   const server = http.createServer((req, res) => {
