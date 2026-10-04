@@ -706,15 +706,10 @@ export async function handleInboundEventIngestion(
   const reviewJid = getDestinationReviewGroupJid();
 
   if (activeId) {
-    // Another event is actively being reviewed — place this in the queue
+    // Another event is actively being reviewed — quietly place this in the queue
     queue.push(eventId);
     await setEventQueue(queue);
-    console.log(`[eventIngestion] Active event #${activeId} exists. Queued event #${eventId} (Queue size: ${queue.length}).`);
-    await sendBotReply(
-      sock,
-      reviewJid,
-      `New event detected: "${pendingEvent.eventName || "New Event"}" [ID: #${eventId}].\nAdded to queue (Position #${queue.length}). Reply !queue to switch to this event, or review current event #${activeId} first.`,
-    );
+    console.log(`[eventIngestion] Active event #${activeId} exists. Queued event #${eventId} silently (Queue size: ${queue.length}).`);
     return true;
   }
 
