@@ -422,8 +422,9 @@ export async function sendEventReviewCard(
   evt: PendingEventData,
   noticePrefix?: string,
 ): Promise<void> {
-  const card = formatEventReviewCard(evt);
-  const fullText = noticePrefix ? `${noticePrefix}\n\n${card}` : card;
+  const queue = await getEventQueue();
+  const card = formatEventReviewCard(evt, queue.length);
+  const fullText = noticePrefix ? `> ${noticePrefix}\n\n${card}` : card;
   const imageBuffer = posterBufferCache.get(evt.id);
 
   if (imageBuffer) {
@@ -463,8 +464,8 @@ export async function promoteNextQueuedEvent(
   await savePendingEvent(nextEvt);
 
   const prefix = noticePrefix
-    ? `${noticePrefix}\n\nPromoting next queued event #${nextEvt.id} ("${nextEvt.eventName || "Untitled"}"):`
-    : `Now reviewing queued event #${nextEvt.id} ("${nextEvt.eventName || "Untitled"}"):`;
+    ? `${noticePrefix}\n> Now reviewing "${nextEvt.eventName || "Untitled"}":`
+    : `Now reviewing "${nextEvt.eventName || "Untitled"}":`;
 
   await sendEventReviewCard(sock, reviewJid, nextEvt, prefix);
   return true;
@@ -491,21 +492,21 @@ export async function checkActiveEventTimeout(sock: any): Promise<void> {
   if (!evt) return;
 
   if (evt.expiresAt && Date.now() > evt.expiresAt) {
-    console.log(`[eventIngestion] Event #${evt.id} timed out after 30 minutes.`);
+    console.log(`[eventIngestion] Event timed out after 30 minutes.`);
     const reviewJid = getDestinationReviewGroupJid();
     await clearPendingEvent(evt.id);
 
     const nextPromoted = await promoteNextQueuedEvent(
       sock,
       reviewJid,
-      `Event #${evt.id} ("${evt.eventName || "Untitled"}") timed out after 30 minutes of inactivity and was removed.`,
+      `Event "${evt.eventName || "Untitled"}" timed out after 30 minutes of inactivity and was removed.`,
     );
 
     if (!nextPromoted) {
       await sendBotReply(
         sock,
         reviewJid,
-        `Event #${evt.id} ("${evt.eventName || "Untitled"}") timed out after 30 minutes of inactivity. Queue is now empty.`,
+        `> Event "${evt.eventName || "Untitled"}" timed out after 30 minutes of inactivity. Queue is now empty.`,
       );
     }
   }
@@ -514,12 +515,12 @@ export async function checkActiveEventTimeout(sock: any): Promise<void> {
 /**
  * Formats the event review card message for WhatsApp with clean, emoji-free markdown.
  */
-export function formatEventReviewCard(evt: PendingEventData): string {
+export function formatEventReviewCard(evt: PendingEventData, queueCount: number = 0): string {
   const missing = getMissingRequiredFields(evt);
   const isComplete = missing.length === 0;
 
   const lines = [
-    `*DK24 Event Review* [ID: #${evt.id}]`,
+    "*DK24 Event Review*",
     "",
     `*Event Name:* ${evt.eventName || "[Missing]"}`,
     `*Organization:* ${evt.organizationName || "[Missing]"}`,
@@ -542,33 +543,38 @@ export function formatEventReviewCard(evt: PendingEventData): string {
     if (evt.status === "awaiting_confirmation") {
       lines.push(
         "*Ready for Submission*",
-        "• Reply *!CONFIRM* to certify details and push to DK24 calendar.",
-        "• Reply *!edit <flags>* to make changes.",
-        "• Reply *!cancel* to discard.",
-        "• Reply *!queue* to defer and review the next queued event.",
+        "",
+        "> Reply *!CONFIRM* to certify details and push to DK24 calendar.",
+        "> Reply *!edit <flags>* to make changes.",
+        "> Reply *!cancel* to discard.",
       );
     } else {
       lines.push(
         "*All required fields are present.*",
-        "• Reply *!submit* or *!CONFIRM* to review and proceed.",
-        "• Reply *!edit <flags>* to make any adjustments.",
-        "• Reply *!cancel* to discard.",
-        "• Reply *!queue* to defer and review the next queued event.",
+        "",
+        "> Reply *!submit* or *!CONFIRM* to review and proceed.",
+        "> Reply *!edit <flags>* to make any adjustments.",
+        "> Reply *!cancel* to discard.",
       );
     }
   } else {
     lines.push(
       "*Missing Required Fields:*",
-      ...missing.map((m) => `  • ${m}`),
+      ...missing.map((m) => `• ${m}`),
       "",
-      "Core members can add/edit missing details using:",
       "!edit -en <name> -on <org> -sdt <start> -edt <end> -eloc <loc> -desc <desc> -etag <tags> -reglink <link> -eweb <site> -epos <url> -name <yourName> -email <yourEmail>",
       "",
-      "*Available Tags (enter comma-separated numbers or names):*",
+      "*Available Tags:*",
       formatTagOptionsList(),
       "",
-      "Tip for Poster URL (-epos): Upload image to free host (e.g. Postimages.org or Imgur) and paste direct link.",
-      "Reply !cancel to discard this event, or !queue to defer and review the next event in queue.",
+      "> Tip: For poster URL (-epos), upload image to a free host and paste direct link.",
+      "> Reply *!cancel* to discard this event.",
+    );
+  }
+
+  if (queueCount > 0) {
+    lines.push(
+      `> Queue: ${queueCount} other event${queueCount === 1 ? "" : "s"} waiting (reply *!queue* to switch).`,
     );
   }
 
@@ -907,7 +913,7 @@ export async function handleEditEventCommand(
   evt.status = "pending_review";
   await savePendingEvent(evt);
 
-  await sendEventReviewCard(sock, from, evt, `Event #${evt.id} updated.`);
+  await sendEventReviewCard(sock, from, evt, "Event details updated.");
 }
 
 /**
@@ -979,10 +985,10 @@ export async function handleQueueEventCommand(
       await sendBotReply(
         sock,
         from,
-        `The queue is empty. Currently reviewing event #${activeId} ("${activeEvt?.eventName || "Untitled"}").`,
+        `> The queue is empty. Currently reviewing "${activeEvt?.eventName || "Untitled"}".`,
       );
     } else {
-      await sendBotReply(sock, from, "No active event and the queue is empty.");
+      await sendBotReply(sock, from, "> No active event and the queue is empty.");
     }
     return;
   }
@@ -998,7 +1004,7 @@ export async function handleQueueEventCommand(
 
   const nextEvt = await getPendingEvent(nextId);
   if (!nextEvt) {
-    await sendBotReply(sock, from, "Failed to load next event from queue.");
+    await sendBotReply(sock, from, "> Failed to load next event from queue.");
     return;
   }
 
@@ -1007,8 +1013,8 @@ export async function handleQueueEventCommand(
 
   const reviewJid = getDestinationReviewGroupJid();
   const notice = activeId
-    ? `Switched active event to #${nextEvt.id} ("${nextEvt.eventName || "Untitled"}"). Event #${activeId} was moved to the queue.`
-    : `Now reviewing event #${nextEvt.id} ("${nextEvt.eventName || "Untitled"}"):`;
+    ? `Switched active event to "${nextEvt.eventName || "Untitled"}". Previous event was moved to the queue.`
+    : `Now reviewing "${nextEvt.eventName || "Untitled"}":`;
 
   await sendEventReviewCard(sock, reviewJid, nextEvt, notice);
 }
@@ -1025,7 +1031,7 @@ export async function handleCancelEventCommand(
 ): Promise<void> {
   const isAuthorized = await isCoreOrAdmin(senderId, msg);
   if (!isAuthorized) {
-    await sendBotReply(sock, from, "Unauthorized: Core role or Admin required.");
+    await sendBotReply(sock, from, "> Unauthorized: Core role or Admin required.");
     return;
   }
 
@@ -1040,14 +1046,14 @@ export async function handleCancelEventCommand(
       queue.splice(idx, 1);
       await setEventQueue(queue);
       await clearPendingEvent(targetId);
-      await sendBotReply(sock, from, `Queued event #${targetId} cancelled and removed from queue.`);
+      await sendBotReply(sock, from, "> Event cancelled and removed from queue.");
       return;
     }
   }
 
   const cancelId = targetId || activeId;
   if (!cancelId) {
-    await sendBotReply(sock, from, "No active event found to cancel.");
+    await sendBotReply(sock, from, "> No active event found to cancel.");
     return;
   }
 
@@ -1058,11 +1064,11 @@ export async function handleCancelEventCommand(
   const nextPromoted = await promoteNextQueuedEvent(
     sock,
     reviewJid,
-    `Event #${cancelId} ("${evt?.eventName || "Untitled"}") has been cancelled.`,
+    `Event "${evt?.eventName || "Untitled"}" has been cancelled.`,
   );
 
   if (!nextPromoted) {
-    await sendBotReply(sock, from, `Event #${cancelId} has been cancelled. No remaining events in queue.`);
+    await sendBotReply(sock, from, `> Event "${evt?.eventName || "Untitled"}" has been cancelled. No remaining events in queue.`);
   }
 }
 
