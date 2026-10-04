@@ -16,6 +16,9 @@ MAX_LOG_BYTES=$((20 * 1024 * 1024))
 cd "$REPO_DIR"
 mkdir -p "$LOG_DIR"
 
+# Ensure git trusts the repository directory in proot
+git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
+
 # Render ran in UTC; keep reminders firing at the same times.
 export TZ="${TZ:-UTC}"
 export NODE_ENV=production
@@ -42,7 +45,7 @@ rm -f "$RESTART_FLAG"
 
 # Optional: follow origin/main and restart on new commits (deploy/termux/autoupdate.sh).
 updater=0
-if grep -Eq '^AUTO_UPDATE=true' .env 2>/dev/null; then
+if grep -Eiq '^[[:space:]]*AUTO_UPDATE[[:space:]]*=[[:space:]]*["'"'"']?(true|1)["'"'"']?' .env 2>/dev/null; then
   LOG_FILE="$LOG_FILE" bash deploy/termux/autoupdate.sh &
   updater=$!
 fi
@@ -52,6 +55,7 @@ stop() {
   echo "[run.sh] stopping" | tee -a "$LOG_FILE"
   [ "$updater" -ne 0 ] && kill -TERM "$updater" 2>/dev/null
   [ "$child" -ne 0 ] && kill -TERM "$child" 2>/dev/null && wait "$child"
+  rm -f "$REPO_DIR/.bot.pid"
   exit 0
 }
 trap stop INT TERM
@@ -65,16 +69,19 @@ while true; do
   # returns node's exit code rather than tee's.
   node dist/bot.js > >(tee -a "$LOG_FILE") 2>&1 &
   child=$!
+  echo "$child" > "$REPO_DIR/.bot.pid"
   wait "$child"
   code=$?
   child=0
+  rm -f "$REPO_DIR/.bot.pid"
 
   if [ -f "$RESTART_FLAG" ]; then
     # The auto-updater stopped the bot to load a new build.
     rm -f "$RESTART_FLAG"
-    echo "[run.sh] restart requested by auto-updater; restarting immediately" | tee -a "$LOG_FILE"
-    backoff=5
-    continue
+    echo "[run.sh] restart requested by auto-updater; reloading run.sh" | tee -a "$LOG_FILE"
+    sleep 1
+    [ "$updater" -ne 0 ] && kill -TERM "$updater" 2>/dev/null
+    exec bash "$0" "$@"
   fi
 
   if [ "$code" -eq 0 ]; then

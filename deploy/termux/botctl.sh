@@ -5,6 +5,7 @@
 #   bash ~/botctl.sh start      start in the background (tmux session "wabot")
 #   bash ~/botctl.sh stop
 #   bash ~/botctl.sh restart    e.g. after `git pull` + build
+#   bash ~/botctl.sh update     pull from git, install, build, and restart
 #   bash ~/botctl.sh status
 #   bash ~/botctl.sh logs       follow the log (Ctrl-C to stop following; the bot keeps running)
 #   bash ~/botctl.sh attach     live console (detach: Ctrl-b then d)
@@ -69,13 +70,20 @@ EOF
   echo "auto-start on boot needs the Termux:Boot app (F-Droid), opened once."
 }
 
+update() {
+  echo "Updating repository from GitHub and rebuilding..."
+  proot-distro login "$DISTRO" -- bash -c "cd '$REPO' && git config --global --add safe.directory '$REPO' 2>/dev/null || true && git fetch origin main && git reset --hard origin/main && NODE_ENV=development npm install --include=dev --no-audit --no-fund && npm run build"
+  restart
+}
+
 case "${1:-}" in
   start) start ;;
   stop) stop ;;
   restart) stop; sleep 2; start ;;
+  update) update ;;
   status) running && echo "running" || echo "stopped" ;;
   logs) tail -n 100 -F "$LOG" ;;
   attach) tmux attach -t "$SESSION" ;;
   install) install ;;
-  *) sed -n '2,11p' "$0"; exit 1 ;;
+  *) sed -n '2,12p' "$0"; exit 1 ;;
 esac
