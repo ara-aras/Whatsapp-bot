@@ -69,12 +69,14 @@ while true; do
   code=$?
   child=0
 
-  if [ "$code" -eq 0 ] && [ -f "$RESTART_FLAG" ]; then
+  if [ -f "$RESTART_FLAG" ]; then
     # The auto-updater stopped the bot to load a new build.
     rm -f "$RESTART_FLAG"
+    echo "[run.sh] restart requested by auto-updater; restarting immediately" | tee -a "$LOG_FILE"
     backoff=5
     continue
   fi
+
   if [ "$code" -eq 0 ]; then
     echo "[run.sh] bot exited cleanly (0); not restarting" | tee -a "$LOG_FILE"
     [ "$updater" -ne 0 ] && kill -TERM "$updater" 2>/dev/null
