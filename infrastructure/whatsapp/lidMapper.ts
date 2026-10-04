@@ -42,18 +42,7 @@ export function registerLidMapperHandlers(sock: any): void {
           await storeLidPhoneMapping(resolvedLid, resolvedPn);
         }
 
-        // On a new member joining a Bot 2 (DKB) group, notify the mentor group
-        // so a human can add them via !addmentor if they're a mentor. No LLM
-        // classification (see introNotifier).
-        if (isBot2 && update.action === "add") {
-          const targetJid = resolvedPn || pid;
-          if (targetJid && !targetJid.endsWith("@g.us")) {
-            const { notifyMentorGroupOfNewMember } = await import(
-              "./introNotifier"
-            );
-            await notifyMentorGroupOfNewMember(sock, update.id, targetJid);
-          }
-        }
+        // Intro notification previously triggered here on member addition; disabled.
       }
     } catch (_e) { /* non-critical */ }
   });

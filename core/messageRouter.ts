@@ -177,9 +177,7 @@ async function processInboundMessage(
     if (text) {
       await setLastUserMessage(`${from}:${senderId}`, text);
     }
-
-    // Member-intro handling is now event-driven (group-participants.update →
-    // introNotifier), not text-scraped here.
+    // Member-intro notifier has been disabled entirely.
 
     // ── CONTEXT CACHING (for !!context, !!summarize, !!tldr features) ─────
     if (text && !msg.key?.fromMe && senderId) {
@@ -194,6 +192,27 @@ async function processInboundMessage(
         );
       } catch {
         /* non-fatal */
+      }
+    }
+
+    // ── EVENT INGESTION (Consortium Announcement Group -> Core Review) ──
+    const isCommandPrefix = text && (text.startsWith("!") || text.startsWith("!!"));
+    if (!isCommandPrefix && from) {
+      try {
+        const { handleInboundEventIngestion } = await import(
+          "../services/DKB/eventIngestionService"
+        );
+        const isIngested = await handleInboundEventIngestion(
+          sock,
+          msg,
+          from,
+          senderId,
+        );
+        if (isIngested) {
+          return;
+        }
+      } catch (ingestErr) {
+        console.warn("[messageRouter] Event ingestion error:", ingestErr);
       }
     }
 
@@ -404,6 +423,8 @@ async function processInboundMessage(
           pending.id,
           pending.botNumber,
           pending.level,
+          pending.read,
+          pending.ask,
         );
         if (ok) {
           const { logAction } = await import("../storage/core/auditRepository");
@@ -412,7 +433,12 @@ async function processInboundMessage(
             "edit_group",
             String(pending.id),
             pending.jid,
-            JSON.stringify({ botNumber: pending.botNumber, level: pending.level }),
+            JSON.stringify({
+              botNumber: pending.botNumber,
+              level: pending.level,
+              read: pending.read,
+              ask: pending.ask,
+            }),
           );
           const groupName = await safeGetGroupName(sock, pending.jid);
           // Clear sessions for the reassigned group (Task 3.5)

@@ -40,6 +40,8 @@ export interface UserSession {
     jid: string;
     botNumber: number;
     level?: number;
+    read?: boolean;
+    ask?: boolean;
   };
   pendingEditChat?: {
     id: number;

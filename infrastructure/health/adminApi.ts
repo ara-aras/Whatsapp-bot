@@ -28,6 +28,8 @@ export interface AllowEntry {
   botNumber: number;
   level?: number;
   enabled: boolean;
+  read?: boolean;
+  ask?: boolean;
   name?: string | null;
   size?: number | null;
   lastActive?: number | null;
@@ -49,6 +51,8 @@ export interface AdminDeps {
     remove: (id: number) => Promise<boolean>;
     setBot: (id: number, botNumber: number, level?: number) => Promise<boolean>;
     setLevel?: (id: number, level: number) => Promise<boolean>;
+    setRead?: (id: number, read: boolean) => Promise<boolean>;
+    setAsk?: (id: number, ask: boolean) => Promise<boolean>;
     setEnabled: (id: number, enabled: boolean) => Promise<boolean>;
   };
   chats: {
@@ -259,6 +263,26 @@ async function handleAllowlist(
           return;
         }
         changes.push("enabled");
+      }
+    }
+    if (body.read !== undefined && (list as any).setRead) {
+      const readVal = !!body.read;
+      if (readVal !== entry.read) {
+        if (!(await (list as any).setRead(id, readVal))) {
+          json(res, 500, { error: "update_failed", field: "read" });
+          return;
+        }
+        changes.push("read");
+      }
+    }
+    if (body.ask !== undefined && (list as any).setAsk) {
+      const askVal = !!body.ask;
+      if (askVal !== entry.ask) {
+        if (!(await (list as any).setAsk(id, askVal))) {
+          json(res, 500, { error: "update_failed", field: "ask" });
+          return;
+        }
+        changes.push("ask");
       }
     }
     json(res, 200, { updated: changes, entry: list.list().find((e) => e.id === id) });

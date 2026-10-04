@@ -10,11 +10,12 @@ const BULK_CAP = Number(process.env.MENTOR_BULK_CAP) || 200;
 
 const USAGE = [
   "Usage (DKB group):",
-  "• !manage mentor -l — list everyone with the role",
-  "• !manage mentor -all — grant to everyone in THIS group",
-  "• !manage mentor -all -rm — remove from everyone in THIS group",
-  "• !manage mentor -jid <phone> — grant to one person",
-  "• !manage mentor -jid <phone> -rm — remove from one person",
+  "• !manage core -l — list everyone with the core role",
+  "• !manage core -all — grant core role to everyone in THIS group",
+  "• !manage core -all -rm — remove core role from everyone in THIS group",
+  "• !manage core -jid <phone> — grant core role to one person",
+  "• !manage core -jid <phone> -rm — remove core role from one person",
+  "(Note: !manage mentor ... is also supported as an alias)",
 ].join("\n");
 
 /** Resolves a group participant to their best (phone) JID + any LID pair. */

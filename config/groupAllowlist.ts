@@ -1,17 +1,19 @@
 import fs from "fs";
 import path from "path";
 
-interface GroupEntry {
+export interface GroupEntry {
   id: number;
   jid: string;
   botNumber: number;
   level: number;
   enabled: boolean;
+  read: boolean;
+  ask: boolean;
 }
 
 let allowedGroups: GroupEntry[] | null = null;
 
-function loadFromFile(filePath: string): { jid: string; botNumber: number; level: number }[] {
+function loadFromFile(filePath: string): { jid: string; botNumber: number; level: number; read: boolean; ask: boolean }[] {
   try {
     const absolutePath = path.isAbsolute(filePath)
       ? filePath
@@ -23,20 +25,32 @@ function loadFromFile(filePath: string): { jid: string; botNumber: number; level
       return parsed
         .map((entry) => {
           if (typeof entry === "string") {
-            return { jid: entry.trim(), botNumber: 0, level: 1 };
+            const jid = entry.trim();
+            return {
+              jid,
+              botNumber: 0,
+              level: 1,
+              read: jid === "120363344916256461@g.us",
+              ask: jid === "120363350449932185@g.us",
+            };
           }
           if (entry && typeof entry === "object" && entry.jid) {
             const botNum = parseInt(entry.botNumber ?? entry.bot_number ?? "0", 10);
             const lvl = parseInt(entry.level ?? "1", 10);
+            const jid = String(entry.jid).trim();
+            const read = entry.read === true || entry.read_mode === true || jid === "120363344916256461@g.us";
+            const ask = entry.ask === true || entry.ask_mode === true || jid === "120363350449932185@g.us";
             return {
-              jid: String(entry.jid).trim(),
+              jid,
               botNumber: isNaN(botNum) ? 0 : botNum,
               level: isNaN(lvl) || lvl < 1 ? 1 : lvl,
+              read,
+              ask,
             };
           }
           return null;
         })
-        .filter((e): e is { jid: string; botNumber: number; level: number } => Boolean(e && e.jid));
+        .filter((e): e is { jid: string; botNumber: number; level: number; read: boolean; ask: boolean } => Boolean(e && e.jid));
     }
   } catch (error) {
     console.warn(`⚠️ Failed to parse allowed groups file ${filePath}:`, error);
@@ -44,7 +58,7 @@ function loadFromFile(filePath: string): { jid: string; botNumber: number; level
   return [];
 }
 
-function loadFromEnv(): { jid: string; botNumber: number; level: number }[] {
+function loadFromEnv(): { jid: string; botNumber: number; level: number; read: boolean; ask: boolean }[] {
   const env = process.env.ALLOWED_GROUPS || "";
   return env
     .split(",")
@@ -59,16 +73,18 @@ function loadFromEnv(): { jid: string; botNumber: number; level: number }[] {
         jid,
         botNumber: isNaN(botNumber) ? 0 : botNumber,
         level: isNaN(level) || level < 1 ? 1 : level,
+        read: jid === "120363344916256461@g.us",
+        ask: jid === "120363350449932185@g.us",
       };
     });
 }
 
-function loadStaticEntries(): { jid: string; botNumber: number; level: number }[] {
+function loadStaticEntries(): { jid: string; botNumber: number; level: number; read: boolean; ask: boolean }[] {
   const envEntries = loadFromEnv();
   const filePath = process.env.ALLOWED_GROUPS_FILE || "allowed-groups.json";
   const fileEntries = filePath ? loadFromFile(filePath) : [];
 
-  const map = new Map<string, { jid: string; botNumber: number; level: number }>();
+  const map = new Map<string, { jid: string; botNumber: number; level: number; read: boolean; ask: boolean }>();
   for (const item of [...fileEntries, ...envEntries]) {
     if (item.jid) map.set(item.jid, item);
   }
@@ -85,6 +101,8 @@ function ensureLoaded(): void {
     botNumber: e.botNumber,
     level: e.level ?? 1,
     enabled: true,
+    read: e.read,
+    ask: e.ask,
   }));
 }
 
@@ -99,6 +117,8 @@ function saveToFile(entries: GroupEntry[]): void {
       botNumber: e.botNumber,
       level: e.level ?? 1,
       enabled: e.enabled,
+      read: Boolean(e.read),
+      ask: Boolean(e.ask),
     }));
     fs.writeFileSync(absolutePath, JSON.stringify(data, null, 2), "utf8");
   } catch (error) {
@@ -118,7 +138,7 @@ async function init(): Promise<void> {
     for (const ent of staticEntries) {
       const exists = currentDb.some((dbE) => dbE.jid === ent.jid);
       if (!exists) {
-        await addAllowedGroup(ent.jid, ent.botNumber, ent.level);
+        await addAllowedGroup(ent.jid, ent.botNumber, ent.level, ent.read, ent.ask);
       }
     }
 
@@ -129,6 +149,8 @@ async function init(): Promise<void> {
       botNumber: e.bot_number,
       level: e.level ?? 1,
       enabled: e.enabled,
+      read: e.read_mode,
+      ask: e.ask_mode,
     }));
   } catch (error) {
     console.warn("⚠️ Failed to load allowed groups from Neon DB, using fallback:", error);
@@ -138,6 +160,8 @@ async function init(): Promise<void> {
       botNumber: e.botNumber,
       level: e.level ?? 1,
       enabled: true,
+      read: e.read,
+      ask: e.ask,
     }));
   }
 
@@ -172,6 +196,8 @@ function listGroups(): GroupEntry[] {
     botNumber: g.botNumber,
     level: g.level ?? 1,
     enabled: g.enabled,
+    read: Boolean(g.read),
+    ask: Boolean(g.ask),
   }));
 }
 
@@ -189,6 +215,8 @@ async function addGroup(
   jid: string | null | undefined,
   botNumber: number = 0,
   level: number = 1,
+  read: boolean = false,
+  ask: boolean = false,
 ): Promise<boolean> {
   if (!jid || !jid.endsWith("@g.us")) return false;
 
@@ -196,7 +224,7 @@ async function addGroup(
 
   try {
     const { addAllowedGroup, getAllowedGroups } = await import("../storage/core/allowlistRepository");
-    const ok = await addAllowedGroup(jid, botNumber, level);
+    const ok = await addAllowedGroup(jid, botNumber, level, read, ask);
     if (ok) {
       const dbRows = await getAllowedGroups();
       allowedGroups = dbRows.map((e) => ({
@@ -205,6 +233,8 @@ async function addGroup(
         botNumber: e.bot_number,
         level: e.level ?? 1,
         enabled: e.enabled,
+        read: e.read_mode,
+        ask: e.ask_mode,
       }));
       saveToFile(allowedGroups!);
       return true;
@@ -218,6 +248,8 @@ async function addGroup(
     existing.botNumber = botNumber;
     existing.level = level;
     existing.enabled = true;
+    existing.read = read;
+    existing.ask = ask;
   } else {
     allowedGroups!.push({
       id: 99000 + allowedGroups!.length,
@@ -225,6 +257,8 @@ async function addGroup(
       botNumber,
       level,
       enabled: true,
+      read,
+      ask,
     });
   }
   saveToFile(allowedGroups!);
@@ -252,27 +286,72 @@ async function removeGroupById(id: number): Promise<boolean> {
   return true;
 }
 
-async function editGroupBot(id: number, botNumber: number, level?: number): Promise<boolean> {
+async function editGroupBot(
+  id: number,
+  botNumber: number,
+  level?: number,
+  read?: boolean,
+  ask?: boolean,
+): Promise<boolean> {
   ensureLoaded();
 
   const entry = allowedGroups!.find((g) => g.id === id);
   if (!entry) return false;
 
   const targetLevel = level !== undefined ? level : (entry.level ?? 1);
+  const targetRead = read !== undefined ? read : Boolean(entry.read);
+  const targetAsk = ask !== undefined ? ask : Boolean(entry.ask);
 
   try {
     const { setGroupBotNumber } = await import("../storage/core/allowlistRepository");
-    await setGroupBotNumber(id, botNumber, targetLevel);
+    await setGroupBotNumber(id, botNumber, targetLevel, targetRead, targetAsk);
   } catch (error) {
     console.warn(`⚠️ Failed to persist edit group bot ID ${id} to DB:`, error);
   }
 
   entry.botNumber = botNumber;
   entry.level = targetLevel;
+  entry.read = targetRead;
+  entry.ask = targetAsk;
   saveToFile(allowedGroups!);
   return true;
 }
 
+async function setGroupRead(id: number, read: boolean): Promise<boolean> {
+  ensureLoaded();
+
+  const entry = allowedGroups!.find((g) => g.id === id);
+  if (!entry) return false;
+
+  try {
+    const { setGroupReadMode } = await import("../storage/core/allowlistRepository");
+    await setGroupReadMode(id, read);
+  } catch (error) {
+    console.warn(`⚠️ Failed to persist group read ID ${id} to DB:`, error);
+  }
+
+  entry.read = read;
+  saveToFile(allowedGroups!);
+  return true;
+}
+
+async function setGroupAsk(id: number, ask: boolean): Promise<boolean> {
+  ensureLoaded();
+
+  const entry = allowedGroups!.find((g) => g.id === id);
+  if (!entry) return false;
+
+  try {
+    const { setGroupAskMode } = await import("../storage/core/allowlistRepository");
+    await setGroupAskMode(id, ask);
+  } catch (error) {
+    console.warn(`⚠️ Failed to persist group ask ID ${id} to DB:`, error);
+  }
+
+  entry.ask = ask;
+  saveToFile(allowedGroups!);
+  return true;
+}
 
 async function setGroupEnabled(id: number, enabled: boolean): Promise<boolean> {
   ensureLoaded();
@@ -302,5 +381,7 @@ export default {
   addGroup,
   removeGroupById,
   editGroupBot,
+  setGroupRead,
+  setGroupAsk,
   setGroupEnabled,
 };

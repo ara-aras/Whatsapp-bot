@@ -386,7 +386,6 @@ export async function shouldSkipMessage(
   const adminOnlyCommands = [
     "add",
     "rm",
-    "edit",
     "enable",
     "disable",
     "listgroups",
@@ -401,8 +400,8 @@ export async function shouldSkipMessage(
     "ping",
     "getjid",
     "whoami",
-    // NOTE: "manage" is NOT here — it has its own RBAC gate inside the handler
-    // that allows both admins AND users with the role.manage permission.
+    // NOTE: "manage" and "edit" are NOT here — they have their own RBAC gates
+    // inside their handlers (supporting role.manage and Core role event review).
   ];
 
   if (adminOnlyCommands.includes(commandName)) {
@@ -550,6 +549,8 @@ async function startBot(): Promise<void> {
       remove: (id) => groupConfig.removeGroupById(id),
       setBot: (id, bot, lvl) => groupConfig.editGroupBot(id, bot, lvl),
       setLevel: (id, lvl) => groupConfig.editGroupBot(id, groupConfig.getGroupEntryById(id)?.botNumber ?? 1, lvl),
+      setRead: (id, read) => groupConfig.setGroupRead(id, read),
+      setAsk: (id, ask) => groupConfig.setGroupAsk(id, ask),
       setEnabled: (id, on) => groupConfig.setGroupEnabled(id, on),
     },
     chats: {

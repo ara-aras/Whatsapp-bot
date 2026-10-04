@@ -347,6 +347,27 @@ export function renderAdminPage(): string {
   .activity-chip { display:inline-block; font-size:11px; padding:2px 7px; border-radius:4px; background:rgba(255, 255, 255, 0.06); color:var(--text-muted); margin-left:6px; font-weight:normal; border:1px solid rgba(255, 255, 255, 0.08); }
   .activity-chip.live { background:var(--cyan-soft); color:var(--cyan); border-color:rgba(56, 189, 248, 0.3); font-weight:600; text-shadow:0 0 8px var(--cyan-glow); }
   .restore-btn { font-size:12px; padding:3px 9px; border-radius:4px; }
+  .bot-section {
+    border-top:1px solid var(--border-glass-gold);
+    margin-top:36px;
+    padding-top:20px;
+  }
+  .bot-subset {
+    margin-top:14px;
+    margin-bottom:20px;
+  }
+  .bot-subset h3 {
+    font-family:var(--sans);
+    font-size:12px;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    color:var(--cyan);
+    margin:10px 0 6px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
   @media (max-width:640px) { th.hide-sm, td.hide-sm { display:none; } td, th { padding:10px 8px; } section.list, .panel { overflow-x:auto; } table { min-width:480px; } }
 </style>
 </head>
@@ -433,8 +454,8 @@ export function renderAdminPage(): string {
       <div class="flash" id="grpAddMsg"></div>
     </div>
     <table>
-      <thead><tr><th>Group</th><th class="hide-sm">Activity</th><th>Bot</th><th>Level</th><th>Active</th><th></th></tr></thead>
-      <tbody id="grpRows"><tr class="empty"><td colspan="6">Loading…</td></tr></tbody>
+      <thead><tr><th>Group</th><th class="hide-sm">Activity</th><th>Bot</th><th>Active</th><th></th></tr></thead>
+      <tbody id="grpRows"><tr class="empty"><td colspan="5">Loading…</td></tr></tbody>
     </table>
     <div class="flash" id="grpMsg"></div>
   </section>
@@ -459,10 +480,54 @@ export function renderAdminPage(): string {
       <div class="flash" id="chatAddMsg"></div>
     </div>
     <table>
-      <thead><tr><th>Number</th><th>Bot</th><th>Level</th><th>Active</th><th></th></tr></thead>
-      <tbody id="chatRows"><tr class="empty"><td colspan="5">Loading…</td></tr></tbody>
+      <thead><tr><th>Number</th><th>Bot</th><th>Active</th><th></th></tr></thead>
+      <tbody id="chatRows"><tr class="empty"><td colspan="4">Loading…</td></tr></tbody>
     </table>
     <div class="flash" id="chatMsg"></div>
+  </section>
+
+  <section class="list bot-section" id="secBot1">
+    <div class="sechead">
+      <h2>Bot 1 — ECB <small id="bot1Count"></small></h2>
+      <div class="hint">ECB persona settings. Group and direct chat level configuration.</div>
+    </div>
+    <div class="bot-subset">
+      <h3>Groups</h3>
+      <table>
+        <thead><tr><th>Group</th><th>Level</th><th>Active</th></tr></thead>
+        <tbody id="bot1GrpRows"><tr class="empty"><td colspan="3">No groups assigned to Bot 1.</td></tr></tbody>
+      </table>
+    </div>
+    <div class="bot-subset">
+      <h3>Direct chats</h3>
+      <table>
+        <thead><tr><th>Number</th><th>Level</th><th>Active</th></tr></thead>
+        <tbody id="bot1ChatRows"><tr class="empty"><td colspan="3">No direct chats assigned to Bot 1.</td></tr></tbody>
+      </table>
+    </div>
+    <div class="flash" id="bot1Msg"></div>
+  </section>
+
+  <section class="list bot-section" id="secBot2">
+    <div class="sechead">
+      <h2>Bot 2 — DKB <small id="bot2Count"></small></h2>
+      <div class="hint">DKB persona settings. Level, Read (Announcement Listener), and Ask (Review Group) configuration.</div>
+    </div>
+    <div class="bot-subset">
+      <h3>Groups</h3>
+      <table>
+        <thead><tr><th>Group</th><th>Level</th><th>Read (Listen)</th><th>Ask (Review Target)</th><th>Active</th></tr></thead>
+        <tbody id="bot2GrpRows"><tr class="empty"><td colspan="5">No groups assigned to Bot 2.</td></tr></tbody>
+      </table>
+    </div>
+    <div class="bot-subset">
+      <h3>Direct chats</h3>
+      <table>
+        <thead><tr><th>Number</th><th>Level</th><th>Active</th></tr></thead>
+        <tbody id="bot2ChatRows"><tr class="empty"><td colspan="3">No direct chats assigned to Bot 2.</td></tr></tbody>
+      </table>
+    </div>
+    <div class="flash" id="bot2Msg"></div>
   </section>
 
   <section class="list" id="secKeys">
@@ -661,22 +726,13 @@ export function renderAdminPage(): string {
 
   // ── allowlists ────────────────────────────────────────────────────
   // ── allowlists ────────────────────────────────────────────────────
+  // ── allowlists ────────────────────────────────────────────────────
+  var allGroups = [];
+  var allChats = [];
+
   function rowFor(kind, e) {
     var label = kind === "groups" ? (e.name || groupNames[e.jid] || "Group") : (e.name || phone(e.jid));
     var sub = e.jid;
-    var isDkb = e.botNumber === 2;
-    var lvlOpt;
-    if (isDkb) {
-      lvlOpt = '<select data-act="lvl" aria-label="Level for ' + esc(label) + '">' +
-        '<option value="1"' + (e.level === 2 ? "" : " selected") + '>Lvl 1 (Community)</option>' +
-        '<option value="2"' + (e.level === 2 ? " selected" : "") + '>Lvl 2 (Live Search)</option>' +
-        '</select>';
-    } else {
-      var botTag = e.botNumber === 3 ? "Mahoraga" : (e.botNumber === 1 ? "ECB" : "Generic");
-      lvlOpt = '<select data-act="lvl" disabled title="Level 2 is only available for DKB at the moment" aria-label="Level for ' + esc(label) + '">' +
-        '<option value="1" selected>Lvl 1 (' + botTag + ')</option>' +
-        '</select>';
-    }
 
     if (kind === "groups") {
       var actHtml = e.lastActive ?
@@ -687,7 +743,6 @@ export function renderAdminPage(): string {
         '<td>' + esc(label) + memberHtml + '<span class="sub mono">' + esc(sub) + '</span></td>' +
         '<td class="hide-sm">' + actHtml + '</td>' +
         '<td class="num"><select data-act="bot" aria-label="Bot for ' + esc(label) + '">' + botOptions(e.botNumber, false) + '</select></td>' +
-        '<td class="num">' + lvlOpt + '</td>' +
         '<td class="num"><label class="toggle"><input type="checkbox" data-act="on"' + (e.enabled ? " checked" : "") + ' aria-label="Active"><span class="muted">' + (e.enabled ? "on" : "off") + '</span></label></td>' +
         '<td class="actions"><button class="quiet danger" data-act="rm">Remove</button></td></tr>';
     }
@@ -695,27 +750,112 @@ export function renderAdminPage(): string {
     return '<tr data-id="' + e.id + '" class="' + (e.enabled ? "" : "off") + '">' +
       '<td>' + esc(label) + '<span class="sub mono">' + esc(sub) + '</span></td>' +
       '<td class="num"><select data-act="bot" aria-label="Bot for ' + esc(label) + '">' + botOptions(e.botNumber, false) + '</select></td>' +
-      '<td class="num">' + lvlOpt + '</td>' +
       '<td class="num"><label class="toggle"><input type="checkbox" data-act="on"' + (e.enabled ? " checked" : "") + ' aria-label="Active"><span class="muted">' + (e.enabled ? "on" : "off") + '</span></label></td>' +
       '<td class="actions"><button class="quiet danger" data-act="rm">Remove</button></td></tr>';
   }
-  function loadList(kind, rowsId, countId, msgId) {
-    var cols = kind === "groups" ? 6 : 5;
-    apiJson(kind).then(function (j) {
-      var rows = j[kind];
-      $(countId).textContent = rows.length ? rows.length : "";
-      $(rowsId).innerHTML = rows.length ? rows.map(function (e) { return rowFor(kind, e); }).join("") :
-        '<tr class="empty"><td colspan="' + cols + '">' + (kind === "groups" ? "The bot isn't answering in any group yet. Add one above." : "No private chats allowed yet.") + '</td></tr>';
-    }).catch(function (e) { $(rowsId).innerHTML = '<tr class="empty"><td colspan="' + cols + '">Could not load this list.</td></tr>'; flash(msgId, e.message, "err"); });
+
+  function rowForBot(kind, botNum, e) {
+    var label = kind === "groups" ? (e.name || groupNames[e.jid] || "Group") : (e.name || phone(e.jid));
+    var sub = e.jid;
+
+    if (botNum === 1) {
+      var lvlOpt1 = '<select data-act="lvl" disabled aria-label="Level for ' + esc(label) + '">' +
+        '<option value="1" selected>Lvl 1 (ECB)</option>' +
+        '</select>';
+      return '<tr data-id="' + e.id + '" class="' + (e.enabled ? "" : "off") + '">' +
+        '<td>' + esc(label) + '<span class="sub mono">' + esc(sub) + '</span></td>' +
+        '<td class="num">' + lvlOpt1 + '</td>' +
+        '<td class="num"><label class="toggle"><input type="checkbox" data-act="on"' + (e.enabled ? " checked" : "") + ' aria-label="Active"><span class="muted">' + (e.enabled ? "on" : "off") + '</span></label></td>' +
+        '</tr>';
+    }
+
+    if (botNum === 2) {
+      var lvlOpt2 = '<select data-act="lvl" aria-label="Level for ' + esc(label) + '">' +
+        '<option value="1"' + (e.level === 2 ? "" : " selected") + '>Lvl 1 (Community)</option>' +
+        '<option value="2"' + (e.level === 2 ? " selected" : "") + '>Lvl 2 (Live Search)</option>' +
+        '</select>';
+
+      if (kind === "groups") {
+        var readToggle = '<label class="toggle"><input type="checkbox" data-act="read"' + (e.read ? " checked" : "") + ' aria-label="Read Announcement Group"><span class="muted">' + (e.read ? "on" : "off") + '</span></label>';
+        var askToggle = '<label class="toggle"><input type="checkbox" data-act="ask"' + (e.ask ? " checked" : "") + ' aria-label="Ask Review Group"><span class="muted">' + (e.ask ? "on" : "off") + '</span></label>';
+        return '<tr data-id="' + e.id + '" class="' + (e.enabled ? "" : "off") + '">' +
+          '<td>' + esc(label) + '<span class="sub mono">' + esc(sub) + '</span></td>' +
+          '<td class="num">' + lvlOpt2 + '</td>' +
+          '<td class="num">' + readToggle + '</td>' +
+          '<td class="num">' + askToggle + '</td>' +
+          '<td class="num"><label class="toggle"><input type="checkbox" data-act="on"' + (e.enabled ? " checked" : "") + ' aria-label="Active"><span class="muted">' + (e.enabled ? "on" : "off") + '</span></label></td>' +
+          '</tr>';
+      }
+
+      return '<tr data-id="' + e.id + '" class="' + (e.enabled ? "" : "off") + '">' +
+        '<td>' + esc(label) + '<span class="sub mono">' + esc(sub) + '</span></td>' +
+        '<td class="num">' + lvlOpt2 + '</td>' +
+        '<td class="num"><label class="toggle"><input type="checkbox" data-act="on"' + (e.enabled ? " checked" : "") + ' aria-label="Active"><span class="muted">' + (e.enabled ? "on" : "off") + '</span></label></td>' +
+        '</tr>';
+    }
+
+    return "";
   }
-  function loadGroups() { loadList("groups", "grpRows", "grpCount", "grpMsg"); }
+
+  function renderBotSections() {
+    var b1Grps = allGroups.filter(function (e) { return e.botNumber === 1; });
+    var b2Grps = allGroups.filter(function (e) { return e.botNumber === 2; });
+    var b1Chats = allChats.filter(function (e) { return e.botNumber === 1; });
+    var b2Chats = allChats.filter(function (e) { return e.botNumber === 2; });
+
+    var b1Total = b1Grps.length + b1Chats.length;
+    var b2Total = b2Grps.length + b2Chats.length;
+    $("bot1Count").textContent = b1Total ? b1Total : "";
+    $("bot2Count").textContent = b2Total ? b2Total : "";
+
+    $("bot1GrpRows").innerHTML = b1Grps.length ? b1Grps.map(function (e) { return rowForBot("groups", 1, e); }).join("") :
+      '<tr class="empty"><td colspan="3">No groups assigned to Bot 1.</td></tr>';
+    $("bot1ChatRows").innerHTML = b1Chats.length ? b1Chats.map(function (e) { return rowForBot("chats", 1, e); }).join("") :
+      '<tr class="empty"><td colspan="3">No direct chats assigned to Bot 1.</td></tr>';
+
+    $("bot2GrpRows").innerHTML = b2Grps.length ? b2Grps.map(function (e) { return rowForBot("groups", 2, e); }).join("") :
+      '<tr class="empty"><td colspan="5">No groups assigned to Bot 2.</td></tr>';
+    $("bot2ChatRows").innerHTML = b2Chats.length ? b2Chats.map(function (e) { return rowForBot("chats", 2, e); }).join("") :
+      '<tr class="empty"><td colspan="3">No direct chats assigned to Bot 2.</td></tr>';
+  }
+
+  function reloadAllAllowlists() {
+    loadGroups();
+    loadChats();
+  }
+
+  function loadGroups() {
+    apiJson("groups").then(function (j) {
+      allGroups = j.groups || [];
+      $("grpCount").textContent = allGroups.length ? allGroups.length : "";
+      $("grpRows").innerHTML = allGroups.length ? allGroups.map(function (e) { return rowFor("groups", e); }).join("") :
+        '<tr class="empty"><td colspan="5">The bot is not answering in any group yet. Add one above.</td></tr>';
+      renderBotSections();
+    }).catch(function (e) {
+      $("grpRows").innerHTML = '<tr class="empty"><td colspan="5">Could not load this list.</td></tr>';
+      flash("grpMsg", e.message, "err");
+    });
+  }
+
   // Fetch group subjects from WhatsApp once so the table shows names, not just JIDs.
   function primeGroupNames() {
     apiJson("discover/groups").then(function (j) { j.groups.forEach(function (g) { groupNames[g.jid] = g.subject; }); })
       .catch(function () { /* socket down: JIDs only */ })
-      .then(loadGroups);
+      .then(reloadAllAllowlists);
   }
-  function loadChats() { loadList("chats", "chatRows", "chatCount", "chatMsg"); }
+
+  function loadChats() {
+    apiJson("chats").then(function (j) {
+      allChats = j.chats || [];
+      $("chatCount").textContent = allChats.length ? allChats.length : "";
+      $("chatRows").innerHTML = allChats.length ? allChats.map(function (e) { return rowFor("chats", e); }).join("") :
+        '<tr class="empty"><td colspan="4">No private chats allowed yet.</td></tr>';
+      renderBotSections();
+    }).catch(function (e) {
+      $("chatRows").innerHTML = '<tr class="empty"><td colspan="4">Could not load this list.</td></tr>';
+      flash("chatMsg", e.message, "err");
+    });
+  }
 
   function bindList(kind, rowsId, msgId, reload) {
     $(rowsId).addEventListener("change", function (ev) {
@@ -729,6 +869,12 @@ export function renderAdminPage(): string {
       if (t.getAttribute("data-act") === "lvl") {
         apiJson(kind + "/" + id, { method: "PATCH", body: { level: Number(t.value) } }).then(function () { flash(msgId, "Level changed.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
       }
+      if (t.getAttribute("data-act") === "read") {
+        apiJson(kind + "/" + id, { method: "PATCH", body: { read: t.checked } }).then(function () { flash(msgId, t.checked ? "Read mode enabled." : "Read mode disabled.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
+      }
+      if (t.getAttribute("data-act") === "ask") {
+        apiJson(kind + "/" + id, { method: "PATCH", body: { ask: t.checked } }).then(function () { flash(msgId, t.checked ? "Ask mode enabled." : "Ask mode disabled.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
+      }
       if (t.getAttribute("data-act") === "on") {
         apiJson(kind + "/" + id, { method: "PATCH", body: { enabled: t.checked } }).then(function () { flash(msgId, t.checked ? "Turned on." : "Turned off.", "ok"); reload(); }).catch(function (e) { flash(msgId, e.message, "err"); reload(); });
       }
@@ -740,8 +886,13 @@ export function renderAdminPage(): string {
       apiJson(kind + "/" + id, { method: "DELETE" }).then(function () { flash(msgId, "Removed.", "ok"); reload(); loadAudit(); }).catch(function (e) { flash(msgId, e.message, "err"); });
     });
   }
-  bindList("groups", "grpRows", "grpMsg", loadGroups);
-  bindList("chats", "chatRows", "chatMsg", loadChats);
+
+  bindList("groups", "grpRows", "grpMsg", reloadAllAllowlists);
+  bindList("chats", "chatRows", "chatMsg", reloadAllAllowlists);
+  bindList("groups", "bot1GrpRows", "bot1Msg", reloadAllAllowlists);
+  bindList("chats", "bot1ChatRows", "bot1Msg", reloadAllAllowlists);
+  bindList("groups", "bot2GrpRows", "bot2Msg", reloadAllAllowlists);
+  bindList("chats", "bot2ChatRows", "bot2Msg", reloadAllAllowlists);
 
   // group discovery panel
   function loadDiscovery() {

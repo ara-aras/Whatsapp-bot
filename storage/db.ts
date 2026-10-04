@@ -266,6 +266,8 @@ export async function ensureSchema(): Promise<void> {
         bot_number INTEGER NOT NULL DEFAULT 0,
         level INTEGER NOT NULL DEFAULT 1,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        read_mode BOOLEAN NOT NULL DEFAULT FALSE,
+        ask_mode BOOLEAN NOT NULL DEFAULT FALSE,
         added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
@@ -275,11 +277,17 @@ export async function ensureSchema(): Promise<void> {
         bot_number INTEGER NOT NULL DEFAULT 0,
         level INTEGER NOT NULL DEFAULT 1,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        read_mode BOOLEAN NOT NULL DEFAULT FALSE,
+        ask_mode BOOLEAN NOT NULL DEFAULT FALSE,
         added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
       ALTER TABLE wa_allowed_groups ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE wa_allowed_chats ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE wa_allowed_groups ADD COLUMN IF NOT EXISTS read_mode BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE wa_allowed_groups ADD COLUMN IF NOT EXISTS ask_mode BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE wa_allowed_chats ADD COLUMN IF NOT EXISTS read_mode BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE wa_allowed_chats ADD COLUMN IF NOT EXISTS ask_mode BOOLEAN NOT NULL DEFAULT FALSE;
 
       CREATE TABLE IF NOT EXISTS wa_daily_user_usage (
         jid TEXT NOT NULL,
@@ -366,6 +374,14 @@ export async function ensureSchema(): Promise<void> {
 
       INSERT INTO rbac_role_permissions (role_name, permission)
       VALUES ('mentor', 'mentor.manage')
+      ON CONFLICT (role_name, permission) DO NOTHING;
+
+      INSERT INTO rbac_roles (name, description)
+      VALUES ('core', 'Can manage mentors and review/edit/confirm events in Core group')
+      ON CONFLICT (name) DO NOTHING;
+
+      INSERT INTO rbac_role_permissions (role_name, permission)
+      VALUES ('core', 'mentor.manage'), ('core', 'event.manage')
       ON CONFLICT (role_name, permission) DO NOTHING;
 
       INSERT INTO rbac_roles (name, description)

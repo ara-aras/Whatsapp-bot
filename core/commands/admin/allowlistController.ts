@@ -2,7 +2,7 @@ import { registerCommand } from "../commandRegistry";
 import groupConfig from "../../../config/groupAllowlist";
 import chatConfig from "../../../config/chatAllowlist";
 import { sendBotReply, safeGetGroupName, safeGetContactName, buildSessionKey } from "../../../bot";
-import { normalizeJid } from "../../../security/rbac";
+import { normalizeJid, isAdminAction } from "../../../security/rbac";
 import { saveSession } from "../../state";
 import { redis } from "../../../storage/redisClient";
 import { botLabel } from "../../../agents/core/botLabels";
@@ -327,30 +327,91 @@ registerCommand({
   handler: rmHandler,
 });
 
-// ── EDIT (!edit [-bid <n>] [-lvl <n>] — this chat/group, or -gid/-cid <id> [-bid <n>] [-lvl <n>]) ──
-// Reassigns the bot or level for an allowlisted group/chat (confirm via !YES).
+// ── EDIT (!edit [-bid <n>] [-lvl <n>] [-read <val>] [-ask <val>] — this chat/group, or -gid/-cid <id>) ──
+// Also routes to event editing (!edit -en ... -on ...) in Core group.
 registerCommand({
   name: "edit",
-  requiresAdmin: true,
   handler: async (ctx) => {
-    const b = ctx.cmdArgs.join(" ").match(/-bid\s+(\d+)/i);
-    const l = ctx.cmdArgs.join(" ").match(/-lvl\s+(\d+)/i);
-    if (!b && !l) {
-      await sendBotReply(
+    const rawJoined = ctx.cmdArgs.join(" ");
+    const b = rawJoined.match(/-bid\s+(\d+)/i);
+    const l = rawJoined.match(/-lvl\s+(\d+)/i);
+    const readMatch = rawJoined.match(/-read\s+([^\s]+)/i);
+    const askMatch = rawJoined.match(/-ask\s+([^\s]+)/i);
+
+    const hasEventFlags = /-(?:en|on|sdt|edt|eloc|el|eweb|rlink|reglink|epos|etag|desc|name|email)\b/i.test(rawJoined);
+    const hasAllowlistFlags = Boolean(b || l || readMatch || askMatch);
+
+    // If no allowlist flags and (has event flags or no group/chat target specified), route to event editor
+    if (!hasAllowlistFlags && (hasEventFlags || !/-(?:g|gid|c|cid)\b/i.test(rawJoined))) {
+      const { handleEditEventCommand } = await import(
+        "../../../services/DKB/eventIngestionService"
+      );
+      await handleEditEventCommand(
         ctx.sock,
         ctx.from,
-        "Usage: !edit [-bid <0-3>] [-lvl <1|2>] (in chat/group) | !edit -g <id> [-bid <n>] [-lvl <n>] | !edit -c <id> [-bid <n>] [-lvl <n>]",
+        ctx.senderId,
+        ctx.cmdArgs,
+        ctx.msg,
       );
       return;
     }
+
+    if (!isAdminAction(ctx.msg, ctx.senderId)) {
+      await sendBotReply(
+        ctx.sock,
+        ctx.from,
+        "Unauthorized: admin privileges required to edit allowlisted bot settings.",
+      );
+      return;
+    }
+
     const t = resolveTarget(ctx);
     if (!t.ok) {
       await sendBotReply(ctx.sock, ctx.from, t.msg);
       return;
     }
+
     const label = t.type === "group" ? "Group" : "Chat";
     const currentBot = t.entry.botNumber;
     const currentLevel = t.entry.level ?? 1;
+    const currentRead = Boolean((t.entry as any).read);
+    const currentAsk = Boolean((t.entry as any).ask);
+
+    function parseBoolFlag(val: string | undefined): boolean | null {
+      if (!val) return null;
+      const v = val.toLowerCase().trim();
+      if (["enable", "enabled", "1", "true", "on", "yes"].includes(v)) return true;
+      if (["disable", "disabled", "0", "false", "off", "no"].includes(v)) return false;
+      return null;
+    }
+
+    let newRead: boolean | undefined = undefined;
+    if (readMatch) {
+      const parsed = parseBoolFlag(readMatch[1]);
+      if (parsed === null) {
+        await sendBotReply(
+          ctx.sock,
+          ctx.from,
+          "Invalid -read value. Use: -read <enable|enabled|1|disable|disabled|0>",
+        );
+        return;
+      }
+      newRead = parsed;
+    }
+
+    let newAsk: boolean | undefined = undefined;
+    if (askMatch) {
+      const parsed = parseBoolFlag(askMatch[1]);
+      if (parsed === null) {
+        await sendBotReply(
+          ctx.sock,
+          ctx.from,
+          "Invalid -ask value. Use: -ask <enable|enabled|1|disable|disabled|0>",
+        );
+        return;
+      }
+      newAsk = parsed;
+    }
 
     let newBot = currentBot;
     if (b) {
@@ -366,29 +427,90 @@ registerCommand({
     if (l) {
       const parsedLvl = parseInt(l[1], 10);
       if (isNaN(parsedLvl) || parsedLvl < 1 || parsedLvl > 2) {
-        await sendBotReply(ctx.sock, ctx.from, "Invalid level. Usage: -lvl <1|2> (1=Standard Community, 2=Live Intelligence).");
+        await sendBotReply(
+          ctx.sock,
+          ctx.from,
+          "Invalid level. Usage: -lvl <1|2> (1=Standard Community, 2=Live Intelligence).",
+        );
         return;
       }
       newLevel = parsedLvl;
     }
 
-    if (newBot === currentBot && newLevel === currentLevel) {
-      await sendBotReply(ctx.sock, ctx.from, `${label} is already using Bot ${newBot} (${botLabel(newBot)}) [Level ${newLevel}].`);
+    // Non-DKB bots only support level 1
+    if (newBot !== 2 && newLevel === 2) {
+      newLevel = 1;
+    }
+
+    const { id, jid } = t.entry;
+    const botChanged = newBot !== currentBot;
+    const levelChanged = newLevel !== currentLevel;
+    const readChanged = newRead !== undefined && newRead !== currentRead;
+    const askChanged = newAsk !== undefined && newAsk !== currentAsk;
+
+    if (!botChanged && !levelChanged && !readChanged && !askChanged) {
+      await sendBotReply(
+        ctx.sock,
+        ctx.from,
+        `${label} is already using Bot ${newBot} (${botLabel(newBot)}) [Level ${newLevel}] (Read: ${currentRead ? "on" : "off"}, Ask: ${currentAsk ? "on" : "off"}).`,
+      );
       return;
     }
-    const { id, jid } = t.entry;
-    const name = t.type === "group" ? await safeGetGroupName(ctx.sock, jid) : await safeGetContactName(jid);
-    if (t.type === "group") {
-      ctx.session.pendingEditGroup = { id, jid, botNumber: newBot, level: newLevel };
-    } else {
-      ctx.session.pendingEditChat = { id, jid, botNumber: newBot, level: newLevel };
+
+    // If bot or level changed, prompt for confirmation via !YES
+    if (botChanged || levelChanged) {
+      const name = t.type === "group" ? await safeGetGroupName(ctx.sock, jid) : await safeGetContactName(jid);
+      if (t.type === "group") {
+        ctx.session.pendingEditGroup = {
+          id,
+          jid,
+          botNumber: newBot,
+          level: newLevel,
+          read: newRead !== undefined ? newRead : currentRead,
+          ask: newAsk !== undefined ? newAsk : currentAsk,
+        };
+      } else {
+        ctx.session.pendingEditChat = { id, jid, botNumber: newBot, level: newLevel };
+      }
+      await sendBotReply(
+        ctx.sock,
+        ctx.from,
+        `Change ${label} ID: ${id} | Name: ${name} | JID: ${jid} to Bot ${newBot} (${botLabel(newBot)}) [Level ${newLevel}] from Bot ${currentBot} (${botLabel(currentBot)}) [Level ${currentLevel}]?\n(Enter !YES to confirm)`,
+      );
+      await saveSession(buildSessionKey(ctx.from, ctx.senderId), ctx.session);
+      return;
     }
-    await sendBotReply(
-      ctx.sock,
-      ctx.from,
-      `Change ${label} ID: ${id} | Name: ${name} | JID: ${jid} to Bot ${newBot} (${botLabel(newBot)}) [Level ${newLevel}] from Bot ${currentBot} (${botLabel(currentBot)}) [Level ${currentLevel}]?\n(Enter !YES to confirm)`,
-    );
-    await saveSession(buildSessionKey(ctx.from, ctx.senderId), ctx.session);
+
+    // Only read and/or ask flags changed (no bot/level change required): apply immediately
+    if (t.type === "group") {
+      if (newRead !== undefined) {
+        await groupConfig.setGroupRead(id, newRead);
+      }
+      if (newAsk !== undefined) {
+        await groupConfig.setGroupAsk(id, newAsk);
+      }
+      try {
+        const { logAction } = await import("../../../storage/core/auditRepository");
+        await logAction(
+          ctx.senderId || "unknown",
+          "edit_group_flags",
+          String(id),
+          jid,
+          JSON.stringify({ read: newRead, ask: newAsk }),
+        );
+      } catch {}
+
+      const finalRead = newRead !== undefined ? newRead : currentRead;
+      const finalAsk = newAsk !== undefined ? newAsk : currentAsk;
+      await sendBotReply(
+        ctx.sock,
+        ctx.from,
+        `✅ Updated Group ID: ${id} | JID: ${jid}\n` +
+          `• Bot: ${currentBot} (${botLabel(currentBot)}) [Level ${currentLevel}]\n` +
+          `• Read (Listen): ${finalRead ? "Enabled" : "Disabled"}\n` +
+          `• Ask (Review Target): ${finalAsk ? "Enabled" : "Disabled"}`,
+      );
+    }
   },
 });
 
