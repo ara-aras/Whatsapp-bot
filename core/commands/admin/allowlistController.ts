@@ -338,7 +338,7 @@ registerCommand({
     const readMatch = rawJoined.match(/-read\s+([^\s]+)/i);
     const askMatch = rawJoined.match(/-ask\s+([^\s]+)/i);
 
-    const hasEventFlags = /-(?:en|on|sdt|edt|eloc|el|eweb|rlink|reglink|epos|etag|desc|name|email)\b/i.test(rawJoined);
+    const hasEventFlags = /-(?:en|on|sdt|edt|eloc|el|loc|location|eweb|web|website|rlink|reglink|register|epos|poster|etag|tag|tags|desc|description|name|submitter|email)\b/i.test(rawJoined);
     const hasAllowlistFlags = Boolean(b || l || readMatch || askMatch);
 
     // If no allowlist flags and (has event flags or no group/chat target specified), route to event editor

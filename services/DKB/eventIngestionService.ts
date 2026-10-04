@@ -1,5 +1,6 @@
 import { downloadMediaMessage, normalizeMessageContent, proto } from "@whiskeysockets/baileys";
 import { createWorker } from "tesseract.js";
+import * as chrono from "chrono-node";
 import { redis } from "../../storage/redisClient";
 import { sendBotReply } from "../../bot";
 import { isAdminAction, normalizeJid } from "../../security/rbac";
@@ -45,6 +46,7 @@ export interface PendingEventData {
   sourceMessageId?: string;
   createdAt: number;
   updatedAt: number;
+  expiresAt?: number;
   status: "pending_review" | "awaiting_confirmation" | "submitted";
   eventName: string;
   organizationName: string;
@@ -66,7 +68,9 @@ const posterBufferCache = new Map<string, Buffer>();
 // Local in-memory store for pending events as fallback when Redis is absent
 const localPendingEvents = new Map<string, PendingEventData>();
 let localActiveEventId: string | null = null;
+let localEventQueue: string[] = [];
 let eventCounter = 1;
+export const TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
  * Checks if a sender has the Core role or Admin privileges.
@@ -231,11 +235,14 @@ export async function extractEventSchema(
       ? parsed.eventTags.filter((t: string) => (EVENT_TAG_OPTIONS as readonly string[]).includes(t))
       : [];
 
+    const rawStart = String(parsed.startDateTime || "").trim();
+    const rawEnd = String(parsed.endDateTime || "").trim();
+
     return {
       eventName: String(parsed.eventName || "").trim(),
       organizationName: String(parsed.organizationName || "").trim(),
-      startDateTime: String(parsed.startDateTime || "").trim(),
-      endDateTime: String(parsed.endDateTime || "").trim(),
+      startDateTime: parseFlexibleDate(rawStart) || rawStart,
+      endDateTime: parseFlexibleDate(rawEnd) || rawEnd,
       eventLocation: String(parsed.eventLocation || "").trim(),
       eventWebsite: String(parsed.eventWebsite || "").trim(),
       registrationLink: String(parsed.registrationLink || "").trim(),
@@ -246,6 +253,24 @@ export async function extractEventSchema(
     console.error("[eventIngestion] Extraction error:", err);
     return {};
   }
+}
+
+/**
+ * Flexible date parser using chrono-node (supports ordinals, UK/India DMY, 12/24hr times, 2-digit years).
+ */
+export function parseFlexibleDate(raw: string): string | null {
+  if (!raw || !raw.trim()) return null;
+  const trimmed = raw.trim();
+  try {
+    const parsed =
+      chrono.en.GB.parseDate(trimmed) ||
+      chrono.parseDate(trimmed) ||
+      new Date(trimmed);
+    if (parsed && !isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  } catch {}
+  return null;
 }
 
 /**
@@ -296,16 +321,56 @@ export function formatTagOptionsList(): string {
   return EVENT_TAG_OPTIONS.map((tag, idx) => `${idx + 1}. ${tag}`).join(" | ");
 }
 
+export async function getActiveEventId(): Promise<string | null> {
+  try {
+    const r = await redis.get("dk24:active_event_id");
+    if (r) return r;
+  } catch {}
+  return localActiveEventId;
+}
+
+export async function setActiveEventId(id: string | null): Promise<void> {
+  localActiveEventId = id;
+  try {
+    if (id) {
+      await redis.set("dk24:active_event_id", id, "EX", 86400 * 3);
+    } else {
+      await redis.del("dk24:active_event_id");
+    }
+  } catch {}
+}
+
+export async function getEventQueue(): Promise<string[]> {
+  try {
+    const raw = await redis.get("dk24:event_queue");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [...localEventQueue];
+}
+
+export async function setEventQueue(queue: string[]): Promise<void> {
+  localEventQueue = [...queue];
+  try {
+    await redis.set("dk24:event_queue", JSON.stringify(queue), "EX", 86400 * 3);
+  } catch {}
+}
+
 /**
  * Saves a pending event to Redis / memory.
  */
 export async function savePendingEvent(evt: PendingEventData): Promise<void> {
   localPendingEvents.set(evt.id, evt);
-  localActiveEventId = evt.id;
+
+  const currentActive = await getActiveEventId();
+  if (!currentActive) {
+    await setActiveEventId(evt.id);
+  }
 
   try {
     await redis.set(`dk24:pending_event:${evt.id}`, JSON.stringify(evt), "EX", 86400 * 3);
-    await redis.set("dk24:active_event_id", evt.id, "EX", 86400 * 3);
   } catch (err) {
     console.warn("[eventIngestion] Redis save failed, using memory:", err);
   }
@@ -315,14 +380,8 @@ export async function savePendingEvent(evt: PendingEventData): Promise<void> {
  * Gets a pending event by ID (or the active one if id is omitted).
  */
 export async function getPendingEvent(id?: string): Promise<PendingEventData | null> {
-  const targetId = id || localActiveEventId;
-  if (!targetId) {
-    try {
-      const activeId = await redis.get("dk24:active_event_id");
-      if (activeId) return getPendingEvent(activeId);
-    } catch (_) {}
-    return null;
-  }
+  const targetId = id || (await getActiveEventId());
+  if (!targetId) return null;
 
   try {
     const raw = await redis.get(`dk24:pending_event:${targetId}`);
@@ -338,38 +397,143 @@ export async function getPendingEvent(id?: string): Promise<PendingEventData | n
 export async function clearPendingEvent(id: string): Promise<void> {
   localPendingEvents.delete(id);
   posterBufferCache.delete(id);
-  if (localActiveEventId === id) localActiveEventId = null;
+  const activeId = await getActiveEventId();
+  if (activeId === id) {
+    await setActiveEventId(null);
+  }
+  const queue = await getEventQueue();
+  const filtered = queue.filter((item) => item !== id);
+  if (filtered.length !== queue.length) {
+    await setEventQueue(filtered);
+  }
 
   try {
     await redis.del(`dk24:pending_event:${id}`);
-    const active = await redis.get("dk24:active_event_id");
-    if (active === id) await redis.del("dk24:active_event_id");
   } catch (_) {}
 }
 
 /**
- * Formats the event review card message for WhatsApp.
+ * Sends a single consolidated message: poster image with review card as caption,
+ * or plain text card if no image exists.
+ */
+export async function sendEventReviewCard(
+  sock: any,
+  targetJid: string,
+  evt: PendingEventData,
+  noticePrefix?: string,
+): Promise<void> {
+  const card = formatEventReviewCard(evt);
+  const fullText = noticePrefix ? `${noticePrefix}\n\n${card}` : card;
+  const imageBuffer = posterBufferCache.get(evt.id);
+
+  if (imageBuffer) {
+    await sock.sendMessage(targetJid, {
+      image: imageBuffer,
+      caption: fullText,
+    });
+  } else {
+    await sendBotReply(sock, targetJid, fullText);
+  }
+}
+
+/**
+ * Promotes the next queued event to active and posts its review card.
+ */
+export async function promoteNextQueuedEvent(
+  sock: any,
+  reviewJid: string,
+  noticePrefix?: string,
+): Promise<boolean> {
+  const queue = await getEventQueue();
+  if (queue.length === 0) {
+    await setActiveEventId(null);
+    return false;
+  }
+
+  const nextId = queue.shift()!;
+  await setEventQueue(queue);
+  await setActiveEventId(nextId);
+
+  const nextEvt = await getPendingEvent(nextId);
+  if (!nextEvt) {
+    return promoteNextQueuedEvent(sock, reviewJid, noticePrefix);
+  }
+
+  nextEvt.expiresAt = Date.now() + TIMEOUT_MS;
+  await savePendingEvent(nextEvt);
+
+  const prefix = noticePrefix
+    ? `${noticePrefix}\n\nPromoting next queued event #${nextEvt.id} ("${nextEvt.eventName || "Untitled"}"):`
+    : `Now reviewing queued event #${nextEvt.id} ("${nextEvt.eventName || "Untitled"}"):`;
+
+  await sendEventReviewCard(sock, reviewJid, nextEvt, prefix);
+  return true;
+}
+
+let timeoutWatcherStarted = false;
+export function ensureTimeoutWatcher(sock: any): void {
+  if (timeoutWatcherStarted) return;
+  timeoutWatcherStarted = true;
+  setInterval(async () => {
+    try {
+      await checkActiveEventTimeout(sock);
+    } catch (err) {
+      console.warn("[eventIngestion] Timeout check error:", err);
+    }
+  }, 30000);
+}
+
+export async function checkActiveEventTimeout(sock: any): Promise<void> {
+  const activeId = await getActiveEventId();
+  if (!activeId) return;
+
+  const evt = await getPendingEvent(activeId);
+  if (!evt) return;
+
+  if (evt.expiresAt && Date.now() > evt.expiresAt) {
+    console.log(`[eventIngestion] Event #${evt.id} timed out after 30 minutes.`);
+    const reviewJid = getDestinationReviewGroupJid();
+    await clearPendingEvent(evt.id);
+
+    const nextPromoted = await promoteNextQueuedEvent(
+      sock,
+      reviewJid,
+      `Event #${evt.id} ("${evt.eventName || "Untitled"}") timed out after 30 minutes of inactivity and was removed.`,
+    );
+
+    if (!nextPromoted) {
+      await sendBotReply(
+        sock,
+        reviewJid,
+        `Event #${evt.id} ("${evt.eventName || "Untitled"}") timed out after 30 minutes of inactivity. Queue is now empty.`,
+      );
+    }
+  }
+}
+
+/**
+ * Formats the event review card message for WhatsApp with clean, emoji-free markdown.
  */
 export function formatEventReviewCard(evt: PendingEventData): string {
   const missing = getMissingRequiredFields(evt);
   const isComplete = missing.length === 0;
 
   const lines = [
-    `🎯 *DK24 Event Ingestion Review* [ID: #${evt.id}]`,
+    `*DK24 Event Review* [ID: #${evt.id}]`,
     "",
-    `📌 *Event Name:* ${evt.eventName || "_[Missing]_"}`,
-    `🏢 *Organization:* ${evt.organizationName || "_[Missing]_"}`,
-    `📅 *Start:* ${evt.startDateTime || "_[Missing]_"}`,
-    `🏁 *End:* ${evt.endDateTime || "_[Missing]_"}`,
-    `📍 *Location:* ${evt.eventLocation || "_[Missing]_"}`,
-    `🏷️ *Tags:* ${evt.eventTags.length > 0 ? evt.eventTags.join(", ") : "_[Missing]_"}`,
-    `🌐 *Website:* ${evt.eventWebsite || "_[None]_"}`,
-    `🔗 *Registration Link:* ${evt.registrationLink || "_[None]_"}`,
-    `🖼️ *Poster URL:* ${evt.eventPosterUrl || "_[None]_"}`,
-    `👤 *Submitter:* ${evt.submittedBy || "_[Missing]_"} (${evt.submittedEmail || "_[Missing]_"})`,
+    `*Event Name:* ${evt.eventName || "[Missing]"}`,
+    `*Organization:* ${evt.organizationName || "[Missing]"}`,
+    `*Start:* ${evt.startDateTime || "[Missing]"}`,
+    `*End:* ${evt.endDateTime || "[Missing]"}`,
+    `*Location:* ${evt.eventLocation || "[Missing]"}`,
+    `*Tags:* ${evt.eventTags && evt.eventTags.length > 0 ? evt.eventTags.join(", ") : "[Missing]"}`,
+    `*Website:* ${evt.eventWebsite || "[None]"}`,
+    `*Registration Link:* ${evt.registrationLink || "[None]"}`,
+    `*Poster URL:* ${evt.eventPosterUrl || "[None]"}`,
+    `*Submitter:* ${evt.submittedBy || "[Missing]"} (${evt.submittedEmail || "[Missing]"})`,
     "",
-    "📝 *Description:*",
-    evt.eventDescription || "_[Missing description]_",
+    "*Description:*",
+    evt.eventDescription || "[Missing description]",
     "",
     "──────────────────────────────",
   ];
@@ -377,34 +541,40 @@ export function formatEventReviewCard(evt: PendingEventData): string {
   if (isComplete) {
     if (evt.status === "awaiting_confirmation") {
       lines.push(
-        "📋 *Ready for Submission*",
-        "• Reply *!CONFIRM* to certify all details are correct and push to DK24 Showcase Review.",
+        "*Ready for Submission*",
+        "• Reply *!CONFIRM* to certify details and push to DK24 calendar.",
         "• Reply *!edit <flags>* to make changes.",
+        "• Reply *!cancel* to discard.",
+        "• Reply *!queue* to defer and review the next queued event.",
       );
     } else {
       lines.push(
-        "✨ *All required fields are present!*",
-        "• Reply *!submit* to review and proceed to confirmation.",
+        "*All required fields are present.*",
+        "• Reply *!submit* or *!CONFIRM* to review and proceed.",
         "• Reply *!edit <flags>* to make any adjustments.",
+        "• Reply *!cancel* to discard.",
+        "• Reply *!queue* to defer and review the next queued event.",
       );
     }
   } else {
     lines.push(
-      "⚠️ *Missing Required Fields:*",
+      "*Missing Required Fields:*",
       ...missing.map((m) => `  • ${m}`),
       "",
       "Core members can add/edit missing details using:",
-      "!edit -en <name> -on <org> -sdt <start> -edt <end> -eloc <loc> -desc <desc> -etag <tags> -name <yourName> -email <yourEmail>",
+      "!edit -en <name> -on <org> -sdt <start> -edt <end> -eloc <loc> -desc <desc> -etag <tags> -reglink <link> -eweb <site> -epos <url> -name <yourName> -email <yourEmail>",
       "",
-      "🏷️ *Available Tags (enter comma-separated numbers or names):*",
+      "*Available Tags (enter comma-separated numbers or names):*",
       formatTagOptionsList(),
       "",
-      "💡 *Tip for Poster URL (-epos):* Upload image to free host (e.g. Postimages.org or Imgur) and paste direct link.",
+      "Tip for Poster URL (-epos): Upload image to free host (e.g. Postimages.org or Imgur) and paste direct link.",
+      "Reply !cancel to discard this event, or !queue to defer and review the next event in queue.",
     );
   }
 
   return lines.join("\n");
 }
+
 
 /**
  * Main Message Ingestion Pipeline:
@@ -496,10 +666,10 @@ export async function handleInboundEventIngestion(
   }
 
   // 3. Schema Extraction
-  console.log("[eventIngestion] 🎯 Event confirmed! Extracting structured DK24 showcase schema...");
+  console.log("[eventIngestion] Event confirmed! Extracting structured DK24 showcase schema...");
   const extracted = await extractEventSchema(textContent, groqApiKey, groqModel);
   const eventId = String(eventCounter++);
-  console.log(`[eventIngestion] 📋 Event #${eventId} extracted: "${extracted.eventName}" by "${extracted.organizationName}"`);
+  console.log(`[eventIngestion] Event #${eventId} extracted: "${extracted.eventName}" by "${extracted.organizationName}"`);
 
   const pendingEvent: PendingEventData = {
     id: eventId,
@@ -507,6 +677,7 @@ export async function handleInboundEventIngestion(
     sourceMessageId: msg.key?.id || undefined,
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    expiresAt: Date.now() + TIMEOUT_MS,
     status: "pending_review",
     eventName: extracted.eventName || "",
     organizationName: extracted.organizationName || "",
@@ -528,67 +699,115 @@ export async function handleInboundEventIngestion(
 
   await savePendingEvent(pendingEvent);
 
-  // 4. Relay to Core / Review Group for Verification
+  // 4. Multi-Event Queueing & Relay to Review Group
+  ensureTimeoutWatcher(sock);
+  const activeId = await getActiveEventId();
+  const queue = await getEventQueue();
   const reviewJid = getDestinationReviewGroupJid();
-  console.log(`[eventIngestion] 📤 Relaying event #${eventId} to review group: ${reviewJid}`);
-  try {
-    if (imageBuffer) {
-      await sock.sendMessage(reviewJid, {
-        image: imageBuffer,
-        caption: `📢 *New Event Detected in Announcements*\nEvent: *${pendingEvent.eventName || "New Event"}*`,
-      });
-    }
 
-    const reviewCard = formatEventReviewCard(pendingEvent);
-    await sendBotReply(sock, reviewJid, reviewCard);
-    console.log(`[eventIngestion] ✅ Event #${eventId} successfully posted to review group!`);
+  if (activeId) {
+    // Another event is actively being reviewed — place this in the queue
+    queue.push(eventId);
+    await setEventQueue(queue);
+    console.log(`[eventIngestion] Active event #${activeId} exists. Queued event #${eventId} (Queue size: ${queue.length}).`);
+    await sendBotReply(
+      sock,
+      reviewJid,
+      `New event detected: "${pendingEvent.eventName || "New Event"}" [ID: #${eventId}].\nAdded to queue (Position #${queue.length}). Reply !queue to switch to this event, or review current event #${activeId} first.`,
+    );
     return true;
-  } catch (err) {
-    console.error(`[eventIngestion] ❌ Failed to relay to review group (${reviewJid}):`, err);
-    return false;
   }
+
+  // No active event — make this event active and post consolidated card (poster + review text)
+  await setActiveEventId(eventId);
+  console.log(`[eventIngestion] Relaying event #${eventId} to review group: ${reviewJid}`);
+  await sendEventReviewCard(sock, reviewJid, pendingEvent);
+  return true;
 }
 
 /**
- * Parses user input flags for !edit
+ * Parses user input flags for !edit supporting aliases and full flag set.
  */
 export function parseEditEventFlags(args: string[]): Record<string, string> {
   const flags: Record<string, string> = {};
   let currentFlag: string | null = null;
+  let rawFlag: string | null = null;
   const currentTokens: string[] = [];
 
-  const knownFlags = new Set([
-    "-en",
-    "-on",
-    "-sdt",
-    "-edt",
-    "-eloc",
-    "-el",
-    "-eweb",
-    "-rlink",
-    "-reglink",
-    "-epos",
-    "-etag",
-    "-desc",
-    "-name",
-    "-email",
-  ]);
+  const flagAliases: Record<string, string> = {
+    "-en": "-en",
+    "-eventname": "-en",
+    "-on": "-on",
+    "-org": "-on",
+    "-organization": "-on",
+    "-sdt": "-sdt",
+    "-start": "-sdt",
+    "-edt": "-edt",
+    "-end": "-edt",
+    "-eloc": "-eloc",
+    "-el": "-eloc",
+    "-loc": "-eloc",
+    "-location": "-eloc",
+    "-eweb": "-eweb",
+    "-web": "-eweb",
+    "-website": "-eweb",
+    "-rlink": "-reglink",
+    "-reglink": "-reglink",
+    "-register": "-reglink",
+    "-epos": "-epos",
+    "-poster": "-epos",
+    "-etag": "-etag",
+    "-tags": "-etag",
+    "-tag": "-etag",
+    "-desc": "-desc",
+    "-description": "-desc",
+    "-name": "-name",
+    "-submitter": "-name",
+    "-email": "-email",
+  };
+
+  const reverseAliases: Record<string, string[]> = {
+    "-en": ["-en", "-eventname"],
+    "-on": ["-on", "-org", "-organization"],
+    "-sdt": ["-sdt", "-start"],
+    "-edt": ["-edt", "-end"],
+    "-eloc": ["-eloc", "-el", "-loc", "-location"],
+    "-eweb": ["-eweb", "-web", "-website"],
+    "-reglink": ["-reglink", "-rlink", "-register"],
+    "-epos": ["-epos", "-poster"],
+    "-etag": ["-etag", "-tags", "-tag"],
+    "-desc": ["-desc", "-description"],
+    "-name": ["-name", "-submitter"],
+    "-email": ["-email"],
+  };
+
+  const assignFlag = (canonical: string, raw: string | null, val: string) => {
+    flags[canonical] = val;
+    if (raw) flags[raw] = val;
+    const aliases = reverseAliases[canonical] || [];
+    for (const a of aliases) {
+      flags[a] = val;
+    }
+  };
+
+  const knownFlags = new Set(Object.keys(flagAliases));
 
   for (const token of args) {
     const lower = token.toLowerCase();
     if (knownFlags.has(lower)) {
       if (currentFlag) {
-        flags[currentFlag] = currentTokens.join(" ").trim();
+        assignFlag(currentFlag, rawFlag, currentTokens.join(" ").trim());
         currentTokens.length = 0;
       }
-      currentFlag = lower;
+      currentFlag = flagAliases[lower];
+      rawFlag = lower;
     } else {
       currentTokens.push(token);
     }
   }
 
   if (currentFlag) {
-    flags[currentFlag] = currentTokens.join(" ").trim();
+    assignFlag(currentFlag, rawFlag, currentTokens.join(" ").trim());
   }
 
   return flags;
@@ -609,10 +828,12 @@ export async function handleEditEventCommand(
     await sendBotReply(
       sock,
       from,
-      "⚠️ Unauthorized: Only DK24 Core members or the admin can edit events.",
+      "Unauthorized: Only DK24 Core members or the admin can edit events.",
     );
     return;
   }
+
+  ensureTimeoutWatcher(sock);
 
   // Check if first arg is an event ID (e.g. #1 or 1)
   let targetId: string | undefined = undefined;
@@ -628,7 +849,7 @@ export async function handleEditEventCommand(
     await sendBotReply(
       sock,
       from,
-      "⚠️ No pending event found to edit. A new event will be loaded when announced.",
+      "No pending event found to edit. A new event will be loaded when announced.",
     );
     return;
   }
@@ -638,18 +859,45 @@ export async function handleEditEventCommand(
     await sendBotReply(
       sock,
       from,
-      "Usage:\n!edit -en <name> -on <org> -sdt <start> -edt <end> -eloc <loc> -desc <desc> -etag <tags> -name <yourName> -email <yourEmail>",
+      "Usage:\n!edit -en <name> -on <org> -sdt <start> -edt <end> -eloc <loc> -desc <desc> -etag <tags> -reglink <link> -eweb <site> -epos <url> -name <yourName> -email <yourEmail>",
     );
     return;
   }
 
   if (flags["-en"]) evt.eventName = flags["-en"];
   if (flags["-on"]) evt.organizationName = flags["-on"];
-  if (flags["-sdt"]) evt.startDateTime = flags["-sdt"];
-  if (flags["-edt"]) evt.endDateTime = flags["-edt"];
-  if (flags["-eloc"] || flags["-el"]) evt.eventLocation = flags["-eloc"] || flags["-el"];
+
+  if (flags["-sdt"]) {
+    const parsed = parseFlexibleDate(flags["-sdt"]);
+    if (parsed) {
+      evt.startDateTime = parsed;
+    } else {
+      await sendBotReply(
+        sock,
+        from,
+        "Invalid start date. You can use formats like '21st May, 2026, 9:00 PM', '07/09/2029 08:45 AM', or 'April 2nd 26 12:30'.",
+      );
+      return;
+    }
+  }
+
+  if (flags["-edt"]) {
+    const parsed = parseFlexibleDate(flags["-edt"]);
+    if (parsed) {
+      evt.endDateTime = parsed;
+    } else {
+      await sendBotReply(
+        sock,
+        from,
+        "Invalid end date. You can use formats like '21st May, 2026, 9:00 PM', '07/09/2029 08:45 AM', or 'April 2nd 26 12:30'.",
+      );
+      return;
+    }
+  }
+
+  if (flags["-eloc"]) evt.eventLocation = flags["-eloc"];
   if (flags["-eweb"]) evt.eventWebsite = flags["-eweb"];
-  if (flags["-rlink"] || flags["-reglink"]) evt.registrationLink = flags["-rlink"] || flags["-reglink"];
+  if (flags["-reglink"]) evt.registrationLink = flags["-reglink"];
   if (flags["-epos"]) evt.eventPosterUrl = flags["-epos"];
   if (flags["-desc"]) evt.eventDescription = flags["-desc"];
   if (flags["-name"]) evt.submittedBy = flags["-name"];
@@ -660,11 +908,11 @@ export async function handleEditEventCommand(
   }
 
   evt.updatedAt = Date.now();
+  evt.expiresAt = Date.now() + TIMEOUT_MS;
   evt.status = "pending_review";
   await savePendingEvent(evt);
 
-  const reviewCard = formatEventReviewCard(evt);
-  await sendBotReply(sock, from, `✅ Event #${evt.id} updated!\n\n${reviewCard}`);
+  await sendEventReviewCard(sock, from, evt, `Event #${evt.id} updated.`);
 }
 
 /**
@@ -682,7 +930,7 @@ export async function handleSubmitEventCommand(
     await sendBotReply(
       sock,
       from,
-      "⚠️ Unauthorized: Only DK24 Core members or the admin can submit events.",
+      "Unauthorized: Only DK24 Core members or the admin can submit events.",
     );
     return;
   }
@@ -690,7 +938,7 @@ export async function handleSubmitEventCommand(
   const targetId = cmdArgs[0]?.replace(/^#/, "");
   const evt = await getPendingEvent(targetId);
   if (!evt) {
-    await sendBotReply(sock, from, "⚠️ No pending event found to submit.");
+    await sendBotReply(sock, from, "No pending event found to submit.");
     return;
   }
 
@@ -699,16 +947,128 @@ export async function handleSubmitEventCommand(
     await sendBotReply(
       sock,
       from,
-      `⚠️ Cannot submit yet. The following required fields are missing:\n${missing.map((m) => `• ${m}`).join("\n")}\n\nUse !edit <flags> to complete them.`,
+      `Cannot submit yet. The following required fields are missing:\n${missing.map((m) => `• ${m}`).join("\n")}\n\nUse !edit <flags> to complete them.`,
     );
     return;
   }
 
   evt.status = "awaiting_confirmation";
+  evt.updatedAt = Date.now();
+  evt.expiresAt = Date.now() + TIMEOUT_MS;
   await savePendingEvent(evt);
 
-  const reviewCard = formatEventReviewCard(evt);
-  await sendBotReply(sock, from, reviewCard);
+  await sendEventReviewCard(sock, from, evt);
+}
+
+/**
+ * Handles !queue / !q command to cycle/switch events in the queue
+ */
+export async function handleQueueEventCommand(
+  sock: any,
+  from: string,
+  senderId: string | undefined,
+  msg?: any,
+): Promise<void> {
+  const isAuthorized = await isCoreOrAdmin(senderId, msg);
+  if (!isAuthorized) {
+    await sendBotReply(sock, from, "Unauthorized: Core role or Admin required.");
+    return;
+  }
+
+  const activeId = await getActiveEventId();
+  const queue = await getEventQueue();
+
+  if (queue.length === 0) {
+    if (activeId) {
+      const activeEvt = await getPendingEvent(activeId);
+      await sendBotReply(
+        sock,
+        from,
+        `The queue is empty. Currently reviewing event #${activeId} ("${activeEvt?.eventName || "Untitled"}").`,
+      );
+    } else {
+      await sendBotReply(sock, from, "No active event and the queue is empty.");
+    }
+    return;
+  }
+
+  // Defer current active event to back of queue
+  if (activeId) {
+    queue.push(activeId);
+  }
+
+  const nextId = queue.shift()!;
+  await setEventQueue(queue);
+  await setActiveEventId(nextId);
+
+  const nextEvt = await getPendingEvent(nextId);
+  if (!nextEvt) {
+    await sendBotReply(sock, from, "Failed to load next event from queue.");
+    return;
+  }
+
+  nextEvt.expiresAt = Date.now() + TIMEOUT_MS;
+  await savePendingEvent(nextEvt);
+
+  const reviewJid = getDestinationReviewGroupJid();
+  const notice = activeId
+    ? `Switched active event to #${nextEvt.id} ("${nextEvt.eventName || "Untitled"}"). Event #${activeId} was moved to the queue.`
+    : `Now reviewing event #${nextEvt.id} ("${nextEvt.eventName || "Untitled"}"):`;
+
+  await sendEventReviewCard(sock, reviewJid, nextEvt, notice);
+}
+
+/**
+ * Handles !cancel command to discard the active event and promote the next queued event
+ */
+export async function handleCancelEventCommand(
+  sock: any,
+  from: string,
+  senderId: string | undefined,
+  cmdArgs: string[] = [],
+  msg?: any,
+): Promise<void> {
+  const isAuthorized = await isCoreOrAdmin(senderId, msg);
+  if (!isAuthorized) {
+    await sendBotReply(sock, from, "Unauthorized: Core role or Admin required.");
+    return;
+  }
+
+  const targetId = cmdArgs[0]?.replace(/^#/, "");
+  const activeId = await getActiveEventId();
+  const queue = await getEventQueue();
+
+  // If specific queued event target was provided
+  if (targetId && targetId !== activeId) {
+    const idx = queue.indexOf(targetId);
+    if (idx !== -1) {
+      queue.splice(idx, 1);
+      await setEventQueue(queue);
+      await clearPendingEvent(targetId);
+      await sendBotReply(sock, from, `Queued event #${targetId} cancelled and removed from queue.`);
+      return;
+    }
+  }
+
+  const cancelId = targetId || activeId;
+  if (!cancelId) {
+    await sendBotReply(sock, from, "No active event found to cancel.");
+    return;
+  }
+
+  const evt = await getPendingEvent(cancelId);
+  await clearPendingEvent(cancelId);
+
+  const reviewJid = getDestinationReviewGroupJid();
+  const nextPromoted = await promoteNextQueuedEvent(
+    sock,
+    reviewJid,
+    `Event #${cancelId} ("${evt?.eventName || "Untitled"}") has been cancelled.`,
+  );
+
+  if (!nextPromoted) {
+    await sendBotReply(sock, from, `Event #${cancelId} has been cancelled. No remaining events in queue.`);
+  }
 }
 
 /**
@@ -726,7 +1086,7 @@ export async function handleConfirmEventCommand(
     await sendBotReply(
       sock,
       from,
-      "⚠️ Unauthorized: Only DK24 Core members or the admin can confirm events.",
+      "Unauthorized: Only DK24 Core members or the admin can confirm events.",
     );
     return;
   }
@@ -734,7 +1094,7 @@ export async function handleConfirmEventCommand(
   const targetId = cmdArgs[0]?.replace(/^#/, "");
   const evt = await getPendingEvent(targetId);
   if (!evt) {
-    await sendBotReply(sock, from, "⚠️ No pending event found to confirm.");
+    await sendBotReply(sock, from, "No pending event found to confirm.");
     return;
   }
 
@@ -743,7 +1103,7 @@ export async function handleConfirmEventCommand(
     await sendBotReply(
       sock,
       from,
-      `⚠️ Cannot confirm yet. Required fields are missing:\n${missing.map((m) => `• ${m}`).join("\n")}\n\nUse !edit <flags> first.`,
+      `Cannot confirm yet. Required fields are missing:\n${missing.map((m) => `• ${m}`).join("\n")}\n\nUse !edit <flags> first.`,
     );
     return;
   }
@@ -771,7 +1131,7 @@ export async function handleConfirmEventCommand(
   };
 
   const url = `${dk24BaseUrl()}/api/v1/events/submit`;
-  console.log(`📡 Pushing event to DK24 website: ${url}`);
+  console.log(`Pushing event to DK24 website: ${url}`);
 
   try {
     const fetchFn = globalThis.fetch;
@@ -790,29 +1150,32 @@ export async function handleConfirmEventCommand(
       await sendBotReply(
         sock,
         from,
-        `❌ Website submission returned error (${res.status}). Please verify API status or retry with !CONFIRM.`,
+        `Website submission returned error (${res.status}). Please verify API status or retry with !CONFIRM.`,
       );
       return;
     }
 
-    const data = await res.json();
     await clearPendingEvent(evt.id);
 
-    await sendBotReply(
-      sock,
-      from,
-      `🎉 *Event Successfully Submitted to DK24 Showcase Review!*\n\n` +
-      `📌 *Event:* ${evt.eventName}\n` +
-      `🏢 *Organization:* ${evt.organizationName}\n` +
-      `📅 *Dates:* ${evt.startDateTime} → ${evt.endDateTime}\n\n` +
-      `The website moderators will review and publish it on dk24.org. Thank you for building in public! 🚀`,
-    );
+    const reviewJid = getDestinationReviewGroupJid();
+    const successMsg =
+      `*Event Successfully Submitted to DK24 Showcase Review*\n\n` +
+      `*Event:* ${evt.eventName}\n` +
+      `*Organization:* ${evt.organizationName}\n` +
+      `*Dates:* ${evt.startDateTime} → ${evt.endDateTime}\n\n` +
+      `The website moderators will review and publish it on the calendar.`;
+
+    await sendBotReply(sock, from, successMsg);
+
+    // Promote next queued event if available
+    await promoteNextQueuedEvent(sock, reviewJid, "Next queued event is ready for review:");
   } catch (error) {
     console.error("[eventIngestion] Network error submitting to website:", error);
     await sendBotReply(
       sock,
       from,
-      `❌ Network error reaching DK24 website (${error instanceof Error ? error.message : String(error)}).`,
+      `Network error reaching DK24 website (${error instanceof Error ? error.message : String(error)}).`,
     );
   }
 }
+

@@ -3,6 +3,8 @@ import {
   handleEditEventCommand,
   handleSubmitEventCommand,
   handleConfirmEventCommand,
+  handleQueueEventCommand,
+  handleCancelEventCommand,
   getPendingEvent,
   formatEventReviewCard,
   clearPendingEvent,
@@ -10,11 +12,48 @@ import {
 } from "../../../services/DKB/eventIngestionService";
 import { sendBotReply } from "../../../bot";
 
-
+// ── EDIT EVENT ──
 registerCommand({
   name: "editevent",
   handler: async (ctx) => {
     await handleEditEventCommand(ctx.sock, ctx.from, ctx.senderId, ctx.cmdArgs, ctx.msg);
+  },
+});
+
+// ── QUEUE / SWITCH ACTIVE EVENT (!queue, !q, !queued) ──
+registerCommand({
+  name: "queue",
+  handler: async (ctx) => {
+    await handleQueueEventCommand(ctx.sock, ctx.from, ctx.senderId, ctx.msg);
+  },
+});
+
+registerCommand({
+  name: "q",
+  handler: async (ctx) => {
+    await handleQueueEventCommand(ctx.sock, ctx.from, ctx.senderId, ctx.msg);
+  },
+});
+
+registerCommand({
+  name: "queued",
+  handler: async (ctx) => {
+    await handleQueueEventCommand(ctx.sock, ctx.from, ctx.senderId, ctx.msg);
+  },
+});
+
+// ── CANCEL / DISCARD ACTIVE OR QUEUED EVENT (!cancel, !cancelevent) ──
+registerCommand({
+  name: "cancel",
+  handler: async (ctx) => {
+    await handleCancelEventCommand(ctx.sock, ctx.from, ctx.senderId, ctx.cmdArgs, ctx.msg);
+  },
+});
+
+registerCommand({
+  name: "cancelevent",
+  handler: async (ctx) => {
+    await handleCancelEventCommand(ctx.sock, ctx.from, ctx.senderId, ctx.cmdArgs, ctx.msg);
   },
 });
 
@@ -54,35 +93,15 @@ registerCommand({
   handler: async (ctx) => {
     const isAuthorized = await isCoreOrAdmin(ctx.senderId, ctx.msg);
     if (!isAuthorized) {
-      await sendBotReply(ctx.sock, ctx.from, "⚠️ Unauthorized: Core role or Admin required.");
+      await sendBotReply(ctx.sock, ctx.from, "Unauthorized: Core role or Admin required.");
       return;
     }
     const evt = await getPendingEvent(ctx.cmdArgs[0]?.replace(/^#/, ""));
     if (!evt) {
-      await sendBotReply(ctx.sock, ctx.from, "ℹ️ No pending event review currently active.");
+      await sendBotReply(ctx.sock, ctx.from, "No pending event review currently active.");
       return;
     }
     const card = formatEventReviewCard(evt);
     await sendBotReply(ctx.sock, ctx.from, card);
-  },
-});
-
-// ── CANCEL / DISCARD PENDING EVENT ──
-registerCommand({
-  name: "cancelevent",
-  handler: async (ctx) => {
-    const isAuthorized = await isCoreOrAdmin(ctx.senderId, ctx.msg);
-    if (!isAuthorized) {
-      await sendBotReply(ctx.sock, ctx.from, "⚠️ Unauthorized: Core role or Admin required.");
-      return;
-    }
-    const targetId = ctx.cmdArgs[0]?.replace(/^#/, "");
-    const evt = await getPendingEvent(targetId);
-    if (!evt) {
-      await sendBotReply(ctx.sock, ctx.from, "ℹ️ No pending event found to cancel.");
-      return;
-    }
-    await clearPendingEvent(evt.id);
-    await sendBotReply(ctx.sock, ctx.from, `🗑️ Event review #${evt.id} has been cancelled.`);
   },
 });

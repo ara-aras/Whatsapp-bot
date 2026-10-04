@@ -1,17 +1,69 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   parseTagInput,
+  parseFlexibleDate,
   getMissingRequiredFields,
   parseEditEventFlags,
   formatEventReviewCard,
   savePendingEvent,
   getPendingEvent,
   clearPendingEvent,
+  getEventQueue,
+  setEventQueue,
+  getActiveEventId,
+  setActiveEventId,
   EVENT_TAG_OPTIONS,
   type PendingEventData,
 } from "../../services/DKB/eventIngestionService";
 
 describe("eventIngestionService", () => {
+  beforeEach(async () => {
+    await setActiveEventId(null);
+    await setEventQueue([]);
+  });
+
+  describe("parseFlexibleDate", () => {
+    it("parses user specified natural date formats", () => {
+      // 1. "21st May, 2026, 21:03"
+      const d1 = parseFlexibleDate("21st May, 2026, 21:03");
+      expect(d1).not.toBeNull();
+      const date1 = new Date(d1!);
+      expect(date1.getFullYear()).toBe(2026);
+      expect(date1.getMonth()).toBe(4); // May = 4
+      expect(date1.getDate()).toBe(21);
+
+      // 2. "07/09/2029 08:45 AM" (DD/MM/YYYY)
+      const d2 = parseFlexibleDate("07/09/2029 08:45 AM");
+      expect(d2).not.toBeNull();
+      const date2 = new Date(d2!);
+      expect(date2.getFullYear()).toBe(2029);
+      expect(date2.getDate()).toBe(7);
+      expect(date2.getMonth()).toBe(8); // Sept = 8
+
+      // 3. "April 2nd 26 12:30"
+      const d3 = parseFlexibleDate("April 2nd 26 12:30");
+      expect(d3).not.toBeNull();
+      const date3 = new Date(d3!);
+      expect(date3.getFullYear()).toBe(2026);
+      expect(date3.getMonth()).toBe(3); // April = 3
+      expect(date3.getDate()).toBe(2);
+
+      // 4. "30/9/2026, 9:00"
+      const d4 = parseFlexibleDate("30/9/2026, 9:00");
+      expect(d4).not.toBeNull();
+      const date4 = new Date(d4!);
+      expect(date4.getFullYear()).toBe(2026);
+      expect(date4.getMonth()).toBe(8); // Sept = 8
+      expect(date4.getDate()).toBe(30);
+    });
+
+    it("returns null for empty or completely invalid strings", () => {
+      expect(parseFlexibleDate("")).toBeNull();
+      expect(parseFlexibleDate("   ")).toBeNull();
+      expect(parseFlexibleDate("not a real date at all")).toBeNull();
+    });
+  });
+
   describe("parseTagInput", () => {
     it("parses single and multiple numeric tags (1-based)", () => {
       // 4 = Hackathon, 9 = Competition
@@ -31,19 +83,19 @@ describe("eventIngestionService", () => {
   });
 
   describe("parseEditEventFlags", () => {
-    it("parses all event edit flags properly", () => {
+    it("parses all event edit flags and aliases properly", () => {
       const args = [
         "-en", "Hack Mangalore 2026",
         "-on", "PA College",
-        "-sdt", "2026-11-10 10:00",
-        "-edt", "2026-11-11 18:00",
-        "-eloc", "Mangaluru Campus",
-        "-eweb", "https://hackmangalore.org",
-        "-rlink", "https://unstop.com/hack-mangalore",
-        "-epos", "https://i.imgur.com/sample.png",
-        "-etag", "4,9",
-        "-desc", "A 24-hour state level hackathon for students across Karnataka to innovate.",
-        "-name", "Rafan Ahamad",
+        "-sdt", "21st May, 2026, 21:03",
+        "-edt", "22nd May, 2026, 18:00",
+        "-loc", "Mangaluru Campus",
+        "-web", "https://hackmangalore.org",
+        "-reglink", "https://unstop.com/hack-mangalore",
+        "-poster", "https://i.imgur.com/sample.png",
+        "-tags", "4,9",
+        "-description", "A 24-hour state level hackathon for students across Karnataka to innovate.",
+        "-submitter", "Rafan Ahamad",
         "-email", "rafan@dk24.org",
       ];
 
@@ -51,15 +103,21 @@ describe("eventIngestionService", () => {
 
       expect(flags["-en"]).toBe("Hack Mangalore 2026");
       expect(flags["-on"]).toBe("PA College");
-      expect(flags["-sdt"]).toBe("2026-11-10 10:00");
-      expect(flags["-edt"]).toBe("2026-11-11 18:00");
+      expect(flags["-sdt"]).toBe("21st May, 2026, 21:03");
+      expect(flags["-edt"]).toBe("22nd May, 2026, 18:00");
       expect(flags["-eloc"]).toBe("Mangaluru Campus");
+      expect(flags["-loc"]).toBe("Mangaluru Campus");
       expect(flags["-eweb"]).toBe("https://hackmangalore.org");
+      expect(flags["-web"]).toBe("https://hackmangalore.org");
+      expect(flags["-reglink"]).toBe("https://unstop.com/hack-mangalore");
       expect(flags["-rlink"]).toBe("https://unstop.com/hack-mangalore");
       expect(flags["-epos"]).toBe("https://i.imgur.com/sample.png");
+      expect(flags["-poster"]).toBe("https://i.imgur.com/sample.png");
       expect(flags["-etag"]).toBe("4,9");
+      expect(flags["-tags"]).toBe("4,9");
       expect(flags["-desc"]).toBe("A 24-hour state level hackathon for students across Karnataka to innovate.");
       expect(flags["-name"]).toBe("Rafan Ahamad");
+      expect(flags["-submitter"]).toBe("Rafan Ahamad");
       expect(flags["-email"]).toBe("rafan@dk24.org");
     });
   });
@@ -116,31 +174,38 @@ describe("eventIngestionService", () => {
   });
 
   describe("formatEventReviewCard", () => {
-    it("includes edit instructions when missing fields exist", () => {
+    it("is completely free of emojis", () => {
       const incomplete: PendingEventData = {
         id: "1",
         sourceGroupJid: "123@g.us",
         createdAt: Date.now(),
         updatedAt: Date.now(),
         status: "pending_review",
-        eventName: "AI Summit",
-        organizationName: "Tech Club",
-        startDateTime: "",
+        eventName: "Hands-on Journey into Smart Technology",
+        organizationName: "Embed Club",
+        startDateTime: "2026-09-30T09:00",
         endDateTime: "",
-        eventLocation: "",
+        eventLocation: "Unix Lab",
         eventWebsite: "",
         registrationLink: "",
-        eventDescription: "",
+        eventDescription: "A hands-on workshop covering Raspberry Pi fundamentals and home automation.",
         eventPosterUrl: "",
-        eventTags: [],
+        eventTags: ["Workshop"],
         submittedBy: "",
         submittedEmail: "",
       };
 
       const card = formatEventReviewCard(incomplete);
+
+      // Verify no emojis are present
+      const emojiRegex = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
+      expect(emojiRegex.test(card)).toBe(false);
+
+      expect(card).toContain("*DK24 Event Review* [ID: #1]");
       expect(card).toContain("Missing Required Fields:");
-      expect(card).toContain("!edit -en <name>");
-      expect(card).toContain("Available Tags");
+      expect(card).toContain("-reglink <link>");
+      expect(card).toContain("!cancel");
+      expect(card).toContain("!queue");
     });
 
     it("shows submit instruction when all fields are complete", () => {
@@ -165,8 +230,10 @@ describe("eventIngestionService", () => {
       };
 
       const card = formatEventReviewCard(complete);
-      expect(card).toContain("All required fields are present!");
+      expect(card).toContain("All required fields are present.");
       expect(card).toContain("!submit");
+      expect(card).toContain("!cancel");
+      expect(card).toContain("!queue");
     });
 
     it("shows CONFIRM instruction when awaiting confirmation", () => {
@@ -193,6 +260,7 @@ describe("eventIngestionService", () => {
       const card = formatEventReviewCard(awaiting);
       expect(card).toContain("Ready for Submission");
       expect(card).toContain("!CONFIRM");
+      expect(card).toContain("!cancel");
     });
   });
 
@@ -232,9 +300,29 @@ describe("eventIngestionService", () => {
     });
   });
 
+  describe("event queue management", () => {
+    it("manages active event and FIFO queue order", async () => {
+      await setActiveEventId("evt-1");
+      await setEventQueue(["evt-2", "evt-3"]);
+
+      expect(await getActiveEventId()).toBe("evt-1");
+      expect(await getEventQueue()).toEqual(["evt-2", "evt-3"]);
+
+      // simulate cycling queue
+      const q = await getEventQueue();
+      const next = q.shift();
+      q.push("evt-1");
+      await setActiveEventId(next!);
+      await setEventQueue(q);
+
+      expect(await getActiveEventId()).toBe("evt-2");
+      expect(await getEventQueue()).toEqual(["evt-3", "evt-1"]);
+    });
+  });
+
   describe("destination review group resolution", () => {
     it("returns configured ask group or defaults to core group jid", async () => {
-      const { getDestinationReviewGroupJid, DK24_CORE_GROUP_JID } = await import(
+      const { getDestinationReviewGroupJid } = await import(
         "../../services/DKB/eventIngestionService"
       );
       const jid = getDestinationReviewGroupJid();
