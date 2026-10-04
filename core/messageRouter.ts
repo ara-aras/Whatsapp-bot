@@ -67,7 +67,10 @@ export async function handleMessageUpsert(
 ) {
   const allowFromMe =
     (process.env.ALLOW_FROM_ME_MESSAGES || "false").toLowerCase() === "true";
-  if (type === "append" && !allowFromMe) return;
+  if (type === "append") {
+    const hasGroupMessage = messages.some((m) => m.key?.remoteJid?.endsWith("@g.us"));
+    if (!allowFromMe && !hasGroupMessage) return;
+  }
 
   logEvent("debug", {
     event: "messages_received",

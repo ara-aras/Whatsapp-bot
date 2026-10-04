@@ -1,4 +1,4 @@
-import { downloadMediaMessage, proto } from "@whiskeysockets/baileys";
+import { downloadMediaMessage, normalizeMessageContent, proto } from "@whiskeysockets/baileys";
 import { createWorker } from "tesseract.js";
 import { redis } from "../../storage/redisClient";
 import { sendBotReply } from "../../bot";
@@ -428,17 +428,24 @@ export async function handleInboundEventIngestion(
     return false;
   }
 
+  console.log(`[eventIngestion] 📥 Detected message in announcement/read group: ${from}`);
+
   const groqApiKey = process.env.GROQ_API_KEY;
   const groqModel = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
-  if (!groqApiKey) return false;
+  if (!groqApiKey) {
+    console.warn("[eventIngestion] ⚠️ GROQ_API_KEY not configured, cannot classify event.");
+    return false;
+  }
 
   // 1. Extract image & caption
-  const msgObj = msg.message;
+  const rawMsg = msg.message;
+  const msgObj = normalizeMessageContent(rawMsg);
   const imageInfo =
     msgObj?.imageMessage ||
-    msgObj?.ephemeralMessage?.message?.imageMessage ||
-    msgObj?.viewOnceMessage?.message?.imageMessage ||
-    msgObj?.viewOnceMessageV2?.message?.imageMessage;
+    (rawMsg as any)?.imageMessage ||
+    (rawMsg as any)?.ephemeralMessage?.message?.imageMessage ||
+    (rawMsg as any)?.viewOnceMessage?.message?.imageMessage ||
+    (rawMsg as any)?.viewOnceMessageV2?.message?.imageMessage;
 
   let textContent =
     imageInfo?.caption ||
@@ -450,32 +457,49 @@ export async function handleInboundEventIngestion(
   let imageBuffer: Buffer | null = null;
   if (imageInfo) {
     try {
-      imageBuffer = (await downloadMediaMessage(msg as any, "buffer", {})) as Buffer;
+      console.log(`[eventIngestion] 🖼️ Downloading image from message ${msg.key?.id}...`);
+      imageBuffer = (await downloadMediaMessage(
+        { key: msg.key, message: { imageMessage: imageInfo } } as any,
+        "buffer",
+        {},
+      )) as Buffer;
       if (imageBuffer) {
+        console.log(`[eventIngestion] 🔍 Image downloaded (${imageBuffer.length} bytes). Running OCR via Tesseract...`);
         const ocrText = await extractTextFromImage(imageBuffer);
         if (ocrText.trim()) {
+          console.log(`[eventIngestion] ✅ OCR extracted text (${ocrText.trim().length} chars):\n${ocrText.trim().slice(0, 150)}...`);
           textContent = `${textContent}\n\n${ocrText}`.trim();
+        } else {
+          console.log("[eventIngestion] ℹ️ OCR finished but found no readable text.");
         }
       }
     } catch (err) {
-      console.warn("[eventIngestion] Failed downloading media message:", err);
+      console.warn("[eventIngestion] ⚠️ Failed downloading media message:", err);
     }
   }
 
   // If text is too short and no image, ignore
-  if (textContent.length < 25 && !imageBuffer) {
+  if (textContent.length < 15 && !imageBuffer) {
+    console.log(`[eventIngestion] ℹ️ Content too short (${textContent.length} chars) with no image, skipping.`);
     return false;
   }
 
   // 2. Classification
+  console.log(`[eventIngestion] 🤖 Classifying content (${textContent.length} chars) with Groq...`);
   const classification = await classifyIfEvent(textContent, groqApiKey, groqModel);
+  console.log(
+    `[eventIngestion] 📊 Result: isEvent=${classification.isEvent}, confidence=${classification.confidence}, category="${classification.category}"`,
+  );
   if (!classification.isEvent || classification.confidence < 0.6) {
+    console.log("[eventIngestion] ⏭️ Message classified as NOT an event. Skipping relay.");
     return false;
   }
 
   // 3. Schema Extraction
+  console.log("[eventIngestion] 🎯 Event confirmed! Extracting structured DK24 showcase schema...");
   const extracted = await extractEventSchema(textContent, groqApiKey, groqModel);
   const eventId = String(eventCounter++);
+  console.log(`[eventIngestion] 📋 Event #${eventId} extracted: "${extracted.eventName}" by "${extracted.organizationName}"`);
 
   const pendingEvent: PendingEventData = {
     id: eventId,
@@ -506,6 +530,7 @@ export async function handleInboundEventIngestion(
 
   // 4. Relay to Core / Review Group for Verification
   const reviewJid = getDestinationReviewGroupJid();
+  console.log(`[eventIngestion] 📤 Relaying event #${eventId} to review group: ${reviewJid}`);
   try {
     if (imageBuffer) {
       await sock.sendMessage(reviewJid, {
@@ -516,9 +541,10 @@ export async function handleInboundEventIngestion(
 
     const reviewCard = formatEventReviewCard(pendingEvent);
     await sendBotReply(sock, reviewJid, reviewCard);
+    console.log(`[eventIngestion] ✅ Event #${eventId} successfully posted to review group!`);
     return true;
   } catch (err) {
-    console.error(`[eventIngestion] Failed to relay to review group (${reviewJid}):`, err);
+    console.error(`[eventIngestion] ❌ Failed to relay to review group (${reviewJid}):`, err);
     return false;
   }
 }
