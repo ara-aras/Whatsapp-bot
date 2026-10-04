@@ -522,18 +522,18 @@ export function formatEventReviewCard(evt: PendingEventData, queueCount: number 
   const lines = [
     "*DK24 Event Review*",
     "",
-    `*Event Name:* ${evt.eventName || "[Missing]"}`,
-    `*Organization:* ${evt.organizationName || "[Missing]"}`,
-    `*Start:* ${evt.startDateTime || "[Missing]"}`,
-    `*End:* ${evt.endDateTime || "[Missing]"}`,
-    `*Location:* ${evt.eventLocation || "[Missing]"}`,
-    `*Tags:* ${evt.eventTags && evt.eventTags.length > 0 ? evt.eventTags.join(", ") : "[Missing]"}`,
-    `*Website:* ${evt.eventWebsite || "[None]"}`,
-    `*Registration Link:* ${evt.registrationLink || "[None]"}`,
-    `*Poster URL:* ${evt.eventPosterUrl || "[None]"}`,
-    `*Submitter:* ${evt.submittedBy || "[Missing]"} (${evt.submittedEmail || "[Missing]"})`,
+    `Event: ${evt.eventName || "[Missing]"}`,
+    `Organization: ${evt.organizationName || "[Missing]"}`,
+    `Start: ${evt.startDateTime || "[Missing]"}`,
+    `End: ${evt.endDateTime || "[Missing]"}`,
+    `Location: ${evt.eventLocation || "[Missing]"}`,
+    `Tags: ${evt.eventTags && evt.eventTags.length > 0 ? evt.eventTags.join(", ") : "[Missing]"}`,
+    `Website: ${evt.eventWebsite || "[None]"}`,
+    `Registration: ${evt.registrationLink || "[None]"}`,
+    `Poster: ${evt.eventPosterUrl || "[None]"}`,
+    `Submitter: ${evt.submittedBy || "[Missing]"} (${evt.submittedEmail || "[Missing]"})`,
     "",
-    "*Description:*",
+    "Description:",
     evt.eventDescription || "[Missing description]",
     "",
     "──────────────────────────────",
@@ -542,39 +542,39 @@ export function formatEventReviewCard(evt: PendingEventData, queueCount: number 
   if (isComplete) {
     if (evt.status === "awaiting_confirmation") {
       lines.push(
-        "*Ready for Submission*",
+        "Ready for Submission",
         "",
-        "> Reply *!CONFIRM* to certify details and push to DK24 calendar.",
-        "> Reply *!edit <flags>* to make changes.",
-        "> Reply *!cancel* to discard.",
+        "> Reply !CONFIRM to certify details and push to DK24 calendar.",
+        "> Reply !edit <flags> to make changes.",
+        "> Reply !cancel to discard.",
       );
     } else {
       lines.push(
-        "*All required fields are present.*",
+        "All required fields are present.",
         "",
-        "> Reply *!submit* or *!CONFIRM* to review and proceed.",
-        "> Reply *!edit <flags>* to make any adjustments.",
-        "> Reply *!cancel* to discard.",
+        "> Reply !submit or !CONFIRM to review and proceed.",
+        "> Reply !edit <flags> to make any adjustments.",
+        "> Reply !cancel to discard.",
       );
     }
   } else {
     lines.push(
-      "*Missing Required Fields:*",
+      "Missing Required Fields:",
       ...missing.map((m) => `• ${m}`),
       "",
       "!edit -en <name> -on <org> -sdt <start> -edt <end> -eloc <loc> -desc <desc> -etag <tags> -reglink <link> -eweb <site> -epos <url> -name <yourName> -email <yourEmail>",
       "",
-      "*Available Tags:*",
+      "Available Tags:",
       formatTagOptionsList(),
       "",
       "> Tip: For poster URL (-epos), upload image to a free host and paste direct link.",
-      "> Reply *!cancel* to discard this event.",
+      "> Reply !cancel to discard this event.",
     );
   }
 
   if (queueCount > 0) {
     lines.push(
-      `> Queue: ${queueCount} other event${queueCount === 1 ? "" : "s"} waiting (reply *!queue* to switch).`,
+      `> Queue: ${queueCount} other event${queueCount === 1 ? "" : "s"} waiting (reply !queue to switch).`,
     );
   }
 

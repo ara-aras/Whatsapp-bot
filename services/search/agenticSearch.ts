@@ -47,6 +47,7 @@ const TOOL_RULES = [
   "- Ground every fact in tool output. NEVER invent scores, prices, names, dates, or numbers.",
   "- If the tools don't contain the answer, say plainly you couldn't find it right now — do not guess or fill from memory.",
   "- Answer concisely. State the date/source the data is from. At most one short caveat.",
+  "- Avoid unnecessary bolding or asterisks (*word* or **word**). Keep text natural, clean, and simple.",
 ].join("\n");
 
 function toolSpecs(): any[] {

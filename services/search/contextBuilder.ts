@@ -28,6 +28,7 @@ export const WEB_RAG_INSTRUCTIONS = [
   "- If the data isn't truly up-to-the-second (e.g. a live score), say what time/date the info is from instead of claiming it's live — do NOT invent a live figure.",
   "- Be concise. At most one short caveat; no long disclaimers or lists of other sites to check.",
   "- If the results genuinely don't answer the question, say so plainly.",
+  "- Avoid unnecessary bolding or asterisks (*word* or **word**). Keep text natural, clean, and simple.",
 ].join("\n");
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;

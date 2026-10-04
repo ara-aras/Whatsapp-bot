@@ -205,11 +205,11 @@ describe("eventIngestionService", () => {
       expect(card).not.toContain("ID: #");
       expect(card).toContain("Missing Required Fields:");
       expect(card).toContain("-reglink <link>");
-      expect(card).toContain("> Reply *!cancel* to discard this event.");
+      expect(card).toContain("> Reply !cancel to discard this event.");
 
       // When queue exists, it is displayed at the last as a quote
       const cardWithQueue = formatEventReviewCard(incomplete, 2);
-      expect(cardWithQueue).toContain("> Queue: 2 other events waiting (reply *!queue* to switch).");
+      expect(cardWithQueue).toContain("> Queue: 2 other events waiting (reply !queue to switch).");
     });
 
     it("shows submit instruction when all fields are complete", () => {
@@ -235,8 +235,8 @@ describe("eventIngestionService", () => {
 
       const card = formatEventReviewCard(complete);
       expect(card).toContain("All required fields are present.");
-      expect(card).toContain("> Reply *!submit* or *!CONFIRM*");
-      expect(card).toContain("> Reply *!cancel* to discard.");
+      expect(card).toContain("> Reply !submit or !CONFIRM");
+      expect(card).toContain("> Reply !cancel to discard.");
     });
 
     it("shows CONFIRM instruction when awaiting confirmation", () => {
@@ -262,8 +262,8 @@ describe("eventIngestionService", () => {
 
       const card = formatEventReviewCard(awaiting);
       expect(card).toContain("Ready for Submission");
-      expect(card).toContain("> Reply *!CONFIRM* to certify");
-      expect(card).toContain("> Reply *!cancel* to discard.");
+      expect(card).toContain("> Reply !CONFIRM to certify");
+      expect(card).toContain("> Reply !cancel to discard.");
     });
   });
 

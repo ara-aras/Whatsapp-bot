@@ -19,9 +19,8 @@ For Tulu, Beary, and Malayalam translation:
 
 CRITICAL FORMATTING RULES:
 - Format text for WhatsApp.
-- Use *asterisks* for bold text (e.g. *bold*).
-- Use _underscores_ for italics (e.g. _italic_).
-- Use ~tilde~ for strikethrough.
+- Avoid unnecessary bolding or asterisks (*word* or **word**). Write in a natural, clean, simple style without bolding routine terms, titles, or field labels.
+- Use _underscores_ for italics only when strictly appropriate.
 - NEVER use markdown like **bold** or __italic__.`;
 
 
