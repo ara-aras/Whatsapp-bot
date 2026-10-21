@@ -188,6 +188,28 @@ proot-distro login debian -- bash -c "cd ~/Whatsapp-bot && git pull && npm ci --
 bash ~/botctl.sh restart
 ```
 
+## Screenshots (`!screenshot`)
+
+The bot runs inside proot, which cannot see the screen, so the capture goes
+through Android's own `screencap` via one of these (set as `SCREENSHOT_CMD`
+in `.env`; it must print a PNG to stdout):
+
+| Route | `SCREENSHOT_CMD` | Setup |
+| :--- | :--- | :--- |
+| Wireless debugging (Android 11+, no root) | `adb exec-out screencap -p` (default) | `apt install adb` in Debian. Developer options → Wireless debugging → pair, then `adb pair localhost:<pair-port>` and `adb connect localhost:<port>` once. Re-do after a reboot or Wi-Fi change. |
+| Root | `su -c "screencap -p"` | none |
+| Shizuku | `rish -c "screencap -p"` | Install Shizuku, start it, export `rish` into Debian. |
+
+Check it by hand first: `adb exec-out screencap -p > /tmp/s.png`.
+
+You (`ADMIN_JIDS`) can always use `!screenshot`. Anyone else needs the
+privileged `screenshot.take` permission on one of their roles (only you can
+assign it). The image is only ever sent to the requester's DM; every
+non-admin use is audit-logged and you get a WhatsApp message. Cooldown:
+`SCREENSHOT_COOLDOWN_SEC` (default 30). Apps that block capture (banking,
+some password managers) show up black. Set `SCREENSHOT_ENABLED=false` to
+turn the command off.
+
 ## What changes compared to Render
 
 | | Render | Phone |

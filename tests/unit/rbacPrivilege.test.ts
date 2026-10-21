@@ -9,6 +9,7 @@ describe("RBAC privilege boundary", () => {
       "allowlist.manage",
       "bot.manage",
       "db.manage",
+      "screenshot.take",
     ]) {
       expect(PRIVILEGED_PERMISSIONS).toContain(p);
     }

@@ -9,6 +9,7 @@ export const RBAC_PERMISSIONS = [
   "club.manage",
   "event.manage",
   "project.manage",
+  "screenshot.take",
 ] as const;
 
 export type RbacPermission = (typeof RBAC_PERMISSIONS)[number];
@@ -25,6 +26,7 @@ export const PRIVILEGED_PERMISSIONS: readonly string[] = [
   "allowlist.manage",
   "bot.manage",
   "db.manage",
+  "screenshot.take",
 ];
 
 export interface RbacRole {

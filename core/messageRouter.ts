@@ -671,6 +671,7 @@ async function processInboundMessage(
         "notify",
         "manage",
         "reveal",
+        "screenshot",
         "clubs",
         "club",
         "events",
