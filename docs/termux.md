@@ -188,27 +188,34 @@ proot-distro login debian -- bash -c "cd ~/Whatsapp-bot && git pull && npm ci --
 bash ~/botctl.sh restart
 ```
 
-## Screenshots (`!screenshot`)
+## Screenshots (`!ss` / `!screenshot`)
 
-The bot runs inside proot, which cannot see the screen, so the capture goes
-through Android's own `screencap` via one of these (set as `SCREENSHOT_CMD`
-in `.env`; it must print a PNG to stdout):
+The bot runs inside proot, which cannot see the screen. A normal app on
+Android also cannot capture the whole screen — `screencap` needs shell- or
+root-level rights. So the capture runs through `SCREENSHOT_CMD` (set in
+`.env`), which must print a PNG to stdout. Pick one:
 
-| Route | `SCREENSHOT_CMD` | Setup |
+| Route | `SCREENSHOT_CMD` | Setup (non-rooted Android 11+) |
 | :--- | :--- | :--- |
-| Wireless debugging (Android 11+, no root) | `adb exec-out screencap -p` (default) | `apt install adb` in Debian. Developer options → Wireless debugging → pair, then `adb pair localhost:<pair-port>` and `adb connect localhost:<port>` once. Re-do after a reboot or Wi-Fi change. |
-| Root | `su -c "screencap -p"` | none |
-| Shizuku | `rish -c "screencap -p"` | Install Shizuku, start it, export `rish` into Debian. |
+| **adb wireless debugging** (default) | `adb exec-out screencap -p` | `apt install adb` in Debian. Settings → Developer options → **Wireless debugging** → on. "Pair device with pairing code" gives a host:port + code → `adb pair 127.0.0.1:<pair-port>` then `adb connect 127.0.0.1:<port>`. Self-contained inside proot. Re-pair after a reboot or Wi-Fi change. |
+| **Shizuku** (`rish`) | `rish -c "screencap -p"` | Install Shizuku, start it (Android 11+ can start it over wireless debugging, no PC), then make `rish` + its jar reachable from the Debian shell. More durable than adb once set up. |
+| **root** | `su -c "screencap -p"` | Rooted phones only. |
 
-Check it by hand first: `adb exec-out screencap -p > /tmp/s.png`.
+Check it by hand first (inside Debian): `adb exec-out screencap -p > /tmp/s.png`.
 
-You (`ADMIN_JIDS`) can always use `!screenshot`. Anyone else needs the
-privileged `screenshot.take` permission on one of their roles (only you can
-assign it). The image is only ever sent to the requester's DM; every
-non-admin use is audit-logged and you get a WhatsApp message. Cooldown:
-`SCREENSHOT_COOLDOWN_SEC` (default 30). Apps that block capture (banking,
-some password managers) show up black. Set `SCREENSHOT_ENABLED=false` to
-turn the command off.
+Access control:
+- You (`ADMIN_JIDS`) can always use `!ss`.
+- `!addSSR <phone-or-jid>` grants one person screenshot-only access; they can
+  then use `!ss` / `!screenshot` and nothing else.
+- `!rmSSR <phone-or-jid>` revokes it. `!listss` shows who has access.
+- The image is only ever sent to the requester's own DM. Every non-admin use
+  is audit-logged and messaged to the admins.
+- The requester's chat must be reachable by the bot (on the allowlist, or a
+  shared allowed group), same as any other command.
+
+Cooldown: `SCREENSHOT_COOLDOWN_SEC` (default 30, admins exempt). Apps that
+block capture (banking, some password managers) show up black. Set
+`SCREENSHOT_ENABLED=false` to turn the command off entirely.
 
 ## What changes compared to Render
 
