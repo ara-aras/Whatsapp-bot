@@ -395,6 +395,9 @@ export async function shouldSkipMessage(
     "neonconnect",
     "notify",
     "reveal",
+    "addssr",
+    "rmssr",
+    "listss",
     // Owner-only utility/probe commands — silently skipped for non-admins so
     // they can't be used to fingerprint the account from any chat.
     "ping",

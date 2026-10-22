@@ -7,3 +7,4 @@ import "./rbacController";
 import "./utilityController";
 import "./reminderController";
 import "./eventReviewController";
+import "./screenshotController";

@@ -339,6 +339,12 @@ export async function ensureSchema(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS screenshot_receivers (
+        jid TEXT PRIMARY KEY,
+        granted_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS ecb_projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,

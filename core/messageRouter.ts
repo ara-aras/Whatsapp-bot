@@ -571,6 +571,7 @@ async function processInboundMessage(
     if (cmdName === "findgroup") cmdName = "findgroups";
     if (cmdName === "findchat") cmdName = "findchats";
     if (cmdName === "delete") cmdName = "rm";
+    if (cmdName === "ss") cmdName = "screenshot";
     const cmdArgs = parts.slice(1);
 
     // ── INTERCEPT AND ROUTE VIA COMMAND DISPATCHER REGISTRY ──
@@ -671,6 +672,11 @@ async function processInboundMessage(
         "notify",
         "manage",
         "reveal",
+        "screenshot",
+        "ss",
+        "addssr",
+        "rmssr",
+        "listss",
         "clubs",
         "club",
         "events",
