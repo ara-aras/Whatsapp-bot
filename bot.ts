@@ -28,7 +28,7 @@ import groupConfig from "./config/groupAllowlist";
 import chatConfig from "./config/chatAllowlist";
 import { useNeonAuthState, getDatabaseUrl, clearAuthState } from "./storage/neonAuthStateStore";
 import { getJidHash, logStructured, logEvent } from "./utils/logger";
-import { normalizeJid, isAdminSender } from "./security/rbac";
+import { normalizeJid, isAdminSender, getSenderId } from "./security/rbac";
 import { scrubSecrets } from "./security/secretScrubber";
 import { calculateTypingDelay } from "./utils/typingDelay";
 import { startHealthServer } from "./infrastructure/health/healthServer";
@@ -446,6 +446,23 @@ export async function shouldSkipMessage(
 
   if (from === "status@broadcast") {
     return true;
+  }
+
+  // Screenshot receivers may run !ss / !screenshot from their own chat even if
+  // that chat is not on the allowlist — but ONLY that command. Their other
+  // messages fall through to the normal allowlist check below and are ignored.
+  // isScreenshotReceiver resolves @lid senders to their phone JID, so a sender
+  // who appears under a hidden LID is still recognised.
+  if (!isAdmin && isCommand && (commandName === "ss" || commandName === "screenshot")) {
+    try {
+      const { isScreenshotReceiver } = await import("./storage/core/screenshotReceiverRepository");
+      const sid = resolvedSenderId || (getSenderId(msg) as string);
+      if (await isScreenshotReceiver(sid)) {
+        return false; // allow through to the command dispatcher
+      }
+    } catch (err) {
+      console.warn("[shouldSkipMessage] screenshot receiver check failed:", err);
+    }
   }
 
   // Only verify allowlists if the sender is not an admin, and the command is not publicExempt or adminOnly
