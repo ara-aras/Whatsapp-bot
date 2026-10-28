@@ -41,3 +41,23 @@ describe("cooldown", () => {
     expect(cooldownRemaining("b", 11000)).toBe(0);
   });
 });
+
+describe("toWhatsAppPayload", () => {
+  it("converts a PNG into a real JPEG", async () => {
+    const sharp = (await import("sharp")).default;
+    const png = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 255, g: 0, b: 0 } },
+    }).png().toBuffer();
+    const { toWhatsAppPayload } = await import("../../services/screenshot/screenshotService");
+    const out = await toWhatsAppPayload(png);
+    expect(out.kind).toBe("image");
+    expect([...out.data.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+  });
+
+  it("falls back to the PNG as a document when conversion fails", async () => {
+    const { toWhatsAppPayload } = await import("../../services/screenshot/screenshotService");
+    const junk = Buffer.from("not an image");
+    const out = await toWhatsAppPayload(junk);
+    expect(out).toEqual({ kind: "document", data: junk });
+  });
+});
