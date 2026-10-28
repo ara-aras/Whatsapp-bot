@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll } from "vitest";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
 import {
   captureScreenshot,
   cooldownRemaining,
@@ -11,16 +14,38 @@ afterEach(() => {
   process.env = { ...origEnv };
 });
 
+let pngPath = "";
+let pngBytes: Buffer;
+
+beforeAll(async () => {
+  const sharp = (await import("sharp")).default;
+  pngBytes = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: { r: 0, g: 128, b: 255 } },
+  }).png().toBuffer();
+  pngPath = path.join(os.tmpdir(), `screenshot-fixture-${process.pid}.png`);
+  await fs.writeFile(pngPath, pngBytes);
+});
+
 describe("captureScreenshot", () => {
-  it("returns stdout when it is a PNG", async () => {
-    process.env.SCREENSHOT_CMD = `printf '\\211PNG\\r\\n\\032\\nDATA'`;
+  it("returns a complete PNG written to stdout", async () => {
+    process.env.SCREENSHOT_CMD = `cat '${pngPath}'`;
     const buf = await captureScreenshot();
-    expect(buf.subarray(1, 4).toString()).toBe("PNG");
+    expect(buf.equals(pngBytes)).toBe(true);
   });
 
   it("rejects non-PNG output", async () => {
     process.env.SCREENSHOT_CMD = "echo hello";
     await expect(captureScreenshot()).rejects.toThrow(/PNG/);
+  });
+
+  it("rejects a PNG whose header is mangled after the signature", async () => {
+    process.env.SCREENSHOT_CMD = `printf '\\211PNG\\r\\n\\032\\n\\015IHDRgarbage'; head -c 64 /dev/zero`;
+    await expect(captureScreenshot()).rejects.toThrow(/corrupt or incomplete/);
+  });
+
+  it("rejects a truncated PNG", async () => {
+    process.env.SCREENSHOT_CMD = `head -c 40 '${pngPath}'`;
+    await expect(captureScreenshot()).rejects.toThrow(/corrupt or incomplete/);
   });
 
   it("rejects non-zero exit with stderr", async () => {
