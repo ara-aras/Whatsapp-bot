@@ -13,6 +13,7 @@ import {
   cooldownRemaining,
   isScreenshotEnabled,
   markUsed,
+  toWhatsAppPayload,
 } from "../../../services/screenshot/screenshotService";
 
 /** Parses a `<jid>` / phone-number argument into a canonical JID. */
@@ -77,7 +78,17 @@ registerCommand({
 
     const isGroup = ctx.from.endsWith("@g.us");
     const dest = isGroup ? ctx.senderId : ctx.from;
-    await ctx.sock.sendMessage(dest, { image, caption: "Phone screenshot" });
+    const payload = await toWhatsAppPayload(image);
+    if (payload.kind === "image") {
+      await ctx.sock.sendMessage(dest, { image: payload.data, caption: "Phone screenshot" });
+    } else {
+      await ctx.sock.sendMessage(dest, {
+        document: payload.data,
+        mimetype: "image/png",
+        fileName: `screenshot-${Date.now()}.png`,
+        caption: "Phone screenshot",
+      });
+    }
     if (isGroup) {
       await sendBotReply(ctx.sock, ctx.from, "Sent to your DM.");
     }

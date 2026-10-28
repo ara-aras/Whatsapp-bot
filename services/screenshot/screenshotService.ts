@@ -82,3 +82,23 @@ export function markUsed(userId: string, now = Date.now()): void {
 export function resetCooldowns(): void {
   lastUse.clear();
 }
+
+export type ScreenshotPayload =
+  | { kind: "image"; data: Buffer }
+  | { kind: "document"; data: Buffer };
+
+/**
+ * Baileys labels every `image:` buffer as image/jpeg, so a raw PNG arrives
+ * as an undisplayable "JPEG". Convert to a real JPEG; if sharp can't load
+ * (it is a native module), fall back to sending the PNG as a document.
+ */
+export async function toWhatsAppPayload(png: Buffer): Promise<ScreenshotPayload> {
+  try {
+    const sharp = (await import("sharp")).default;
+    const jpeg = await sharp(png).jpeg({ quality: 85 }).toBuffer();
+    return { kind: "image", data: jpeg };
+  } catch (err) {
+    console.warn("[screenshot] JPEG conversion failed, sending as document:", err);
+    return { kind: "document", data: png };
+  }
+}
