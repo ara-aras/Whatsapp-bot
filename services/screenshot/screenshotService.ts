@@ -10,9 +10,11 @@ import path from "path";
  * Root: `su -c "screencap -p"`. Shizuku: `rish -c "screencap -p"`.
  * The command comes from the owner's .env, never from chat input.
  *
- * Stdout is redirected to a temp file by the shell rather than read through a
- * Node pipe: Shizuku's rish corrupts binary output written into a pipe (the
- * PNG header arrives mangled), while a plain file comes through intact.
+ * Both stdout and stderr are redirected into one temp file by the shell. When
+ * its stderr is not a terminal, Shizuku's rish splits the remote output across
+ * stdout and stderr in alternating pieces, so capturing stdout alone yields a
+ * PNG with chunks missing. Pointing both at the same file reassembles it; any
+ * real error text ends up in the file too and is reported from there.
  */
 const DEFAULT_CMD = "adb exec-out screencap -p";
 const TIMEOUT_MS = 15_000;
@@ -39,12 +41,16 @@ export async function captureScreenshot(): Promise<Buffer> {
   const cmd = process.env.SCREENSHOT_CMD?.trim() || DEFAULT_CMD;
   const out = path.join(os.tmpdir(), `screenshot-${process.pid}-${Date.now()}.png`);
   try {
-    await runToFile(cmd, out);
-    const { size } = await fs.stat(out);
+    const code = await runToFile(cmd, out);
+    const { size } = await fs.stat(out).catch(() => ({ size: 0 }));
     if (size > MAX_BYTES) throw new ScreenshotError("capture output too large");
-    const buf = await fs.readFile(out);
+    const buf = size > 0 ? await fs.readFile(out) : Buffer.alloc(0);
+    if (code !== 0) {
+      throw new ScreenshotError(`exit ${code}: ${textSnippet(buf) || "no output"}`);
+    }
     if (buf.length < PNG_MAGIC.length || !buf.subarray(0, 8).equals(PNG_MAGIC)) {
-      throw new ScreenshotError("capture command did not return a PNG");
+      const text = textSnippet(buf);
+      throw new ScreenshotError(`capture command did not return a PNG${text ? `: ${text}` : ""}`);
     }
     if (!isCompletePng(buf)) {
       throw new ScreenshotError("capture came back corrupt or incomplete");
@@ -55,13 +61,21 @@ export async function captureScreenshot(): Promise<Buffer> {
   }
 }
 
-function runToFile(cmd: string, out: string): Promise<void> {
+/** First printable part of command output, for error messages. */
+function textSnippet(buf: Buffer): string {
+  return buf
+    .toString("utf8", 0, Math.min(buf.length, 300))
+    .replace(/[^\x20-\x7e\n]/g, "")
+    .trim();
+}
+
+/** Runs the command with stdout and stderr both written to `out`; resolves with the exit code. */
+function runToFile(cmd: string, out: string): Promise<number | null> {
   return new Promise((resolve, reject) => {
-    const child = spawn("sh", ["-c", `{ ${cmd}\n} > "$SCREENSHOT_OUT"`], {
+    const child = spawn("sh", ["-c", `{ ${cmd}\n} > "$SCREENSHOT_OUT" 2>&1`], {
       env: { ...process.env, SCREENSHOT_OUT: out },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: "ignore",
     });
-    let stderr = "";
     let settled = false;
     const finish = (fn: () => void) => {
       if (settled) return;
@@ -74,17 +88,8 @@ function runToFile(cmd: string, out: string): Promise<void> {
       finish(() => reject(new ScreenshotError("capture command timed out")));
     }, TIMEOUT_MS);
 
-    child.stderr.on("data", (d: Buffer) => {
-      if (stderr.length < 500) stderr += d.toString();
-    });
     child.on("error", (err) => finish(() => reject(new ScreenshotError(err.message))));
-    child.on("close", (code) =>
-      finish(() =>
-        code === 0
-          ? resolve()
-          : reject(new ScreenshotError(`exit ${code}: ${stderr.trim() || "no output"}`)),
-      ),
-    );
+    child.on("close", (code) => finish(() => resolve(code)));
   });
 }
 
