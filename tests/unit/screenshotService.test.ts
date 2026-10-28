@@ -33,6 +33,17 @@ describe("captureScreenshot", () => {
     expect(buf.equals(pngBytes)).toBe(true);
   });
 
+  it("reassembles a PNG whose pieces alternate between stdout and stderr", async () => {
+    // Mimics Shizuku's rish when stderr is not a tty: 8 bytes to stdout,
+    // the next 8 to stderr, and so on.
+    process.env.SCREENSHOT_CMD =
+      `n=$(wc -c < '${pngPath}'); i=0; while [ $i -lt $n ]; do ` +
+      `if [ $(( (i / 8) % 2 )) -eq 0 ]; then tail -c +$((i + 1)) '${pngPath}' | head -c 8; ` +
+      `else tail -c +$((i + 1)) '${pngPath}' | head -c 8 >&2; fi; i=$((i + 8)); done`;
+    const buf = await captureScreenshot();
+    expect(buf.equals(pngBytes)).toBe(true);
+  });
+
   it("rejects non-PNG output", async () => {
     process.env.SCREENSHOT_CMD = "echo hello";
     await expect(captureScreenshot()).rejects.toThrow(/PNG/);
