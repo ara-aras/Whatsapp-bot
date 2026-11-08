@@ -816,6 +816,10 @@ async function startBot(): Promise<void> {
 
   registerContactSyncHandlers(sock);
   registerLidMapperHandlers(sock);
+  // Incoming-call signalling → laptop (Aerie call card, Decline). Off with CALL_BRIDGE_ENABLED=false.
+  void import("./services/calls/callBridge").then((m) => m.registerCallBridge(sock)).catch((err) => {
+    console.warn("[callBridge] not started:", err instanceof Error ? err.message : err);
+  });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     markInbound();
