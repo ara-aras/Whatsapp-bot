@@ -820,6 +820,10 @@ async function startBot(): Promise<void> {
   void import("./services/calls/callBridge").then((m) => m.registerCallBridge(sock)).catch((err) => {
     console.warn("[callBridge] not started:", err instanceof Error ? err.message : err);
   });
+  // Masjid timetable photos in the timings group → laptop (Aerie's Salah lock). Off with SALAH_WATCH_ENABLED=false.
+  void import("./services/salah/salahWatcher").then((m) => m.registerSalahWatcher(sock)).catch((err) => {
+    console.warn("[salah] watcher not started:", err instanceof Error ? err.message : err);
+  });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     markInbound();
