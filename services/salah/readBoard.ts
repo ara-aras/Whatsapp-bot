@@ -41,7 +41,9 @@ export async function ocrBoard(image: Buffer): Promise<Timetable | null> {
   }
 }
 
-const VISION_MODEL = process.env.GROQ_VISION_MODEL || process.env.GROQ_MODEL_SCOUT || "meta-llama/llama-4-scout-17b-16e-instruct";
+// Must be a Groq model that takes images. Not GROQ_MODEL_SCOUT: that one is a chat model setting
+// (now a text-only model), and Llama 4 Scout itself is gone from Groq.
+const VISION_MODEL = process.env.GROQ_VISION_MODEL || "qwen/qwen3.8-27b";
 
 const VISION_PROMPT = `This is a photo of a mosque's prayer-time board. Read it and answer with JSON only:
 {"date":"YYYY-MM-DD or null","adhan":["Fajr","Dhuhr","Asr","Maghrib","Isha"],"iqamah":[5 values or null],"sunrise":"HH:MM or null"}
