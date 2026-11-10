@@ -3,9 +3,10 @@
  * timings group, read it and hand the times to the laptop (Aerie) over Redis.
  *
  *  - Only the configured group is watched (SALAH_GROUP_JID).
- *  - The chat around the photo (its caption and the group's messages from 15 minutes before to
- *    90 seconds after) is checked for the masjid's name: a photo tied to a different masjid is
- *    skipped; one with no name is used but marked as assumed.
+ *  - Which masjid a photo is for: its caption, if that names a masjid; otherwise the first message
+ *    after it (within 3 minutes, and before the next photo) that names one. Text sent before the
+ *    photo never counts: it belongs to an earlier photo. A photo of another masjid, or one nobody
+ *    names, is skipped.
  *  - The photo is read by OCR first; the Groq vision model only if OCR cannot agree on the times.
  *  - The result is stored under SALAH_KEY (so Aerie gets it when it connects later) and published
  *    on SALAH_CHANNEL (so a running Aerie gets it at once).
@@ -21,8 +22,8 @@ export const SALAH_MASJID = process.env.SALAH_MASJID || "Noor Masjid";
 export const SALAH_CHANNEL = process.env.SALAH_CHANNEL || "laptop:salah";
 export const SALAH_KEY = process.env.SALAH_KEY || "laptop:salah:times";
 const KEEP_MS = 30 * 24 * 60 * 60 * 1000;
-const BEFORE_MS = 15 * 60 * 1000;
-const AFTER_MS = 90 * 1000;
+/** How long after a photo its label may still come ("Noor masjid" sent as the next message). */
+const AFTER_MS = 3 * 60 * 1000;
 
 /** What Aerie receives (matches `BoardMessage` in Aerie's src-tauri/src/aerie_salah/mod.rs). */
 export interface BoardMessage {
@@ -40,29 +41,49 @@ export function boardMessage(t: Timetable, source: "ocr" | "vision", named: bool
   return { masjid, named, date: t.date, adhan: t.adhan, iqamah: t.iqamah, sunrise: t.sunrise, source, sent_at: sentAt };
 }
 
-/** Recent text in the group, to find a masjid name near a photo. */
-export class RecentTexts {
-  private items: Array<{ at: number; text: string }> = [];
-  add(at: number, text: string): void {
-    if (!text.trim()) return;
-    this.items.push({ at, text });
-    const cutoff = at - 2 * BEFORE_MS;
-    this.items = this.items.filter((i) => i.at >= cutoff).slice(-200);
+/** One message in the group, in the order they arrived. */
+export interface GroupEvent {
+  seq: number;
+  at: number;
+  kind: "text" | "image";
+  text: string;
+}
+
+/** The group's recent messages, in arrival order (timestamps are only to the second). */
+export class GroupLog {
+  private seq = 0;
+  private items: GroupEvent[] = [];
+  add(at: number, kind: "text" | "image", text: string): number {
+    const seq = ++this.seq;
+    if (kind === "image" || text.trim()) this.items.push({ seq, at, kind, text });
+    const cutoff = at - 30 * 60 * 1000;
+    this.items = this.items.filter((i) => i.at >= cutoff).slice(-300);
+    return seq;
   }
-  around(at: number): string {
-    return this.items.filter((i) => i.at >= at - BEFORE_MS && i.at <= at + AFTER_MS).map((i) => i.text).join("\n");
+  /** What came after message `seq`, up to `until`. */
+  after(seq: number, until: number): GroupEvent[] {
+    return this.items.filter((i) => i.seq > seq && i.at <= until);
   }
 }
 
-/** Decide from the caption and the chat whether to use the photo, and whether the masjid was named. */
-export function decide(caption: string, chat: string, ours = SALAH_MASJID.split(/\s+/)[0]): { use: boolean; named: boolean } {
+/**
+ * Which masjid a photo is for:
+ *  [photo + caption]         the caption decides, when it names a masjid;
+ *  [photo] then [text]       the first text after it that names a masjid decides, stopping at the
+ *                            next photo (that text would be for the newer photo);
+ *  nothing names it          skipped (a board from another masjid must never replace Noor's).
+ */
+export function labelPhoto(caption: string, following: GroupEvent[], ours = SALAH_MASJID.split(/\s+/)[0]): { use: boolean; named: boolean; why: string } {
   const cap = masjidMention(caption, ours);
-  if (cap === "this") return { use: true, named: true };
-  if (cap === "other") return { use: false, named: false };
-  const near = masjidMention(chat, ours);
-  if (near === "this") return { use: true, named: true };
-  if (near === "other") return { use: false, named: false };
-  return { use: true, named: false };
+  if (cap === "this") return { use: true, named: true, why: "caption" };
+  if (cap === "other") return { use: false, named: false, why: "caption names another masjid" };
+  for (const e of following) {
+    if (e.kind === "image") break;
+    const m = masjidMention(e.text, ours);
+    if (m === "this") return { use: true, named: true, why: "next message" };
+    if (m === "other") return { use: false, named: false, why: "next message names another masjid" };
+  }
+  return { use: false, named: false, why: "no masjid named" };
 }
 
 function imageOf(msg: any): any | null {
@@ -83,14 +104,14 @@ function textOf(msg: any): string {
   return m?.conversation || m?.extendedTextMessage?.text || m?.imageMessage?.caption || "";
 }
 
-const recent = new RecentTexts();
+const log = new GroupLog();
 
-async function handlePhoto(msg: any, image: any, at: number): Promise<void> {
-  // Give the group a moment to say which masjid it is ("Noor masjid timings" often follows).
-  await new Promise((r) => setTimeout(r, AFTER_MS));
-  const { use, named } = decide(image.caption || "", recent.around(at));
+async function handlePhoto(msg: any, image: any, at: number, seq: number): Promise<void> {
+  // Without a named caption, give the group a moment to say which masjid it is.
+  if (masjidMention(image.caption || "", SALAH_MASJID.split(/\s+/)[0]) === "none") await new Promise((r) => setTimeout(r, AFTER_MS));
+  const { use, named, why } = labelPhoto(image.caption || "", log.after(seq, at + AFTER_MS));
   if (!use) {
-    console.log("[salah] photo skipped: the chat ties it to another masjid");
+    console.log(`[salah] photo skipped: ${why}`);
     return;
   }
   const buffer = (await downloadMediaMessage({ key: msg.key, message: { imageMessage: image } } as any, "buffer", {})) as Buffer;
@@ -104,7 +125,7 @@ async function handlePhoto(msg: any, image: any, at: number): Promise<void> {
   const { redis } = await import("../../storage/redisClient");
   await redis.set(SALAH_KEY, payload, "PX", KEEP_MS);
   await redis.publish(SALAH_CHANNEL, payload);
-  console.log(`[salah] timetable sent to the laptop (${read.source}${named ? "" : ", masjid assumed"}): ${read.timetable.adhan.join(" ")}`);
+  console.log(`[salah] timetable sent to the laptop (${read.source}, named by ${why}): ${read.timetable.adhan.join(" ")}`);
 }
 
 /** Wire the watcher onto the Baileys socket. Off with SALAH_WATCH_ENABLED=false. */
@@ -114,11 +135,11 @@ export function registerSalahWatcher(sock: any): void {
     for (const msg of messages ?? []) {
       if (msg?.key?.remoteJid !== SALAH_GROUP_JID) continue;
       const at = Number(msg.messageTimestamp ?? 0) * 1000 || Date.now();
-      recent.add(at, textOf(msg));
       const image = imageOf(msg);
+      const seq = log.add(at, image ? "image" : "text", textOf(msg));
       // History sync replays old photos on reconnect: only boards from the last day are read.
       if (image && Date.now() - at < 24 * 60 * 60 * 1000) {
-        void handlePhoto(msg, image, at).catch((err) => console.warn("[salah] could not read the photo:", err instanceof Error ? err.message : err));
+        void handlePhoto(msg, image, at, seq).catch((err) => console.warn("[salah] could not read the photo:", err instanceof Error ? err.message : err));
       }
     }
   });

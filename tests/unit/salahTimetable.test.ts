@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agreedTimetable, checkTimetable, findDate, masjidMention, parseBoard, to24, type Timetable } from "../../services/salah/timetable";
-import { RecentTexts, boardMessage, decide } from "../../services/salah/salahWatcher";
+import { GroupLog, boardMessage, labelPhoto } from "../../services/salah/salahWatcher";
 
 // OCR words (text + position) from a real photo of the Noor Masjid board, 2026-11-04.
 const fixture = JSON.parse(readFileSync(join(__dirname, "../fixtures/noor-board-words.json"), "utf8"));
@@ -74,18 +74,52 @@ describe("masjid name near the photo", () => {
     expect(masjidMention("timings updated")).toBe("none");
   });
 
-  it("decides from the caption first, then the chat", () => {
-    expect(decide("Noor masjid", "jumma masjid")).toEqual({ use: true, named: true });
-    expect(decide("", "Bilal masjid timings")).toEqual({ use: false, named: false });
-    expect(decide("", "updated timings")).toEqual({ use: true, named: false });
+  // Replays a group: "img:" lines are photos (caption after the colon), others are texts.
+  function photoLabels(lines: string[]) {
+    const log = new GroupLog();
+    const photos: Array<{ seq: number; caption: string; at: number }> = [];
+    lines.forEach((l, i) => {
+      const at = 1_000_000 + i * 1000;
+      const isImg = l.startsWith("img:");
+      const seq = log.add(at, isImg ? "image" : "text", isImg ? l.slice(4) : l);
+      if (isImg) photos.push({ seq, caption: l.slice(4), at });
+    });
+    return photos.map((p) => labelPhoto(p.caption, log.after(p.seq, p.at + 180_000)).use);
+  }
+
+  it("[photo + caption]: the caption decides", () => {
+    expect(photoLabels(["img:Noor masjid timings"])).toEqual([true]);
+    expect(photoLabels(["img:Jumma masjid timings"])).toEqual([false]);
+    expect(labelPhoto("Noor masjid", [{ seq: 2, at: 0, kind: "text", text: "Jumma masjid" }]).use).toBe(true);
   });
 
-  it("only looks at the chat around the photo", () => {
-    const r = new RecentTexts();
-    r.add(1_000_000, "Bilal masjid timings");
-    r.add(1_000_000 + 20 * 60_000, "anything");
-    expect(r.around(1_000_000 + 20 * 60_000)).toBe("anything");
-    expect(r.around(1_000_000 + 60_000)).toContain("Bilal");
+  it("[photo] then [text]: the text after it decides", () => {
+    expect(photoLabels(["img:", "Noor masjid"])).toEqual([true]);
+    expect(photoLabels(["img:", "assalamu alaikum", "noor masjid timings"])).toEqual([true]);
+    expect(photoLabels(["img:", "Bilal masjid"])).toEqual([false]);
+  });
+
+  it("text from before the photo never labels it (the Asr 4:39 bug)", () => {
+    // Noor's board with its label, then another masjid's board labelled after it.
+    expect(photoLabels(["img:", "Noor masjid", "img:", "Jumma masjid"])).toEqual([true, false]);
+    // A label before a photo belongs to the photo before it, not this one.
+    expect(photoLabels(["Noor masjid timings", "img:"])).toEqual([false]);
+  });
+
+  it("a label after the next photo is for that photo", () => {
+    expect(photoLabels(["img:", "img:", "Noor masjid"])).toEqual([false, true]);
+  });
+
+  it("a photo nobody names is skipped", () => {
+    expect(photoLabels(["img:timings updated"])).toEqual([false]);
+    expect(photoLabels(["img:"])).toEqual([false]);
+  });
+
+  it("only waits three minutes for the label", () => {
+    const log = new GroupLog();
+    const seq = log.add(1_000_000, "image", "");
+    log.add(1_000_000 + 4 * 60_000, "text", "Noor masjid");
+    expect(labelPhoto("", log.after(seq, 1_000_000 + 180_000)).use).toBe(false);
   });
 });
 
