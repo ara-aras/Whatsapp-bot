@@ -291,6 +291,17 @@ async function handleAllowlist(
 
   if (req.method === "DELETE") {
     const ok = await list.remove(id);
+    if (ok) {
+      // Same action names and detail shape as the WhatsApp !rm path, so the
+      // console's Activity list can offer Restore for removals made here too.
+      // Not awaited: an audit write must never delay or fail the removal.
+      const details = JSON.stringify({ jid: entry.jid, botNumber: entry.botNumber, level: entry.level ?? 1 });
+      import("../../storage/core/auditRepository")
+        .then(({ logAction }) =>
+          logAction("admin_web", kind === "groups" ? "remove_group" : "remove_chat", String(id), entry.jid, details),
+        )
+        .catch(() => {});
+    }
     json(res, ok ? 200 : 500, ok ? { removed: true } : { error: "remove_failed" });
     return;
   }

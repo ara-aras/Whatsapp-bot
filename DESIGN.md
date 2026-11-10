@@ -4,7 +4,19 @@
 
 ## Aesthetic Thesis
 
-A dark, atmospheric, high-craft operational dashboard inspired by the divine shikigami **Mahoraga (Eight-Handled Sword Divergent Sila Divine General)**. Replaces flat, generic SaaS layouts with an evocative cosmic void aesthetic: deep obsidian black canvas (`#050811`), ethereal cyan/teal cursed energy (`#38bdf8` / `#06b6d4`), radiant divine gold (`#fbbf24`), and translucent frosted glassmorphism.
+A dark, atmospheric, high-craft operational dashboard inspired by the divine shikigami **Mahoraga (Eight-Handled Sword Divergent Sila Divine General)**. Replaces flat, generic SaaS layouts with an evocative cosmic void aesthetic: deep obsidian black canvas (`#050811`), ethereal cyan/teal cursed energy (`#38bdf8` / `#06b6d4`), radiant divine gold (`#fbbf24`), on solid deep-indigo surfaces with hairline rules.
+
+## Current build (admin console, `infrastructure/health/adminPage.ts`)
+
+This section describes what ships; where it conflicts with older notes below, it wins.
+
+- **Surfaces:** solid, not glass. `--void #050811` ground, `--surface #0a1020`, `--surface-2 #0e1628`, `--surface-3 #131d33`. Elevation is a 1px `--line rgba(148,163,184,.13)` border, never a border plus a wide shadow. No `backdrop-filter`, no art behind data.
+- **Gold is the brand and "healthy":** wheel linework, the wordmark emblem, the primary button, the active filter chip. **Cyan is interaction:** focus rings, switches when on, selection highlight, live-activity dots. Emerald / amber / crimson are state only (chips, arc, reading values), always paired with text or shape.
+- **Type:** Cinzel only for the MAHORAGA wordmark and login title. Space Grotesk for all UI at 14px base, headings 19px/28px weight 600, tabular numerals. JetBrains Mono only for JIDs, key prefixes, latencies and ages.
+- **The Eight Handles instrument:** a drawn SVG wheel whose eight handles are eight live readings (Socket, Inbound, Outbound, Uptime, Neon, Redis, Groq, Search), clockwise from the top. Handle vocabulary, shared with the list beside it: solid gold with a dark centre = healthy, amber ring with a dot = degraded, crimson ring with a slash = down, dashed ring = no data. The rim arc shows freshness of the last inbound message. Spokes turn only while connecting; nothing moves under reduced motion. Hovering a handle lights its reading and the reverse. Pairing swaps the wheel for the QR in the same slot.
+- **Routing ledger:** one table, one row per group or chat: bot, level (DKB only), read and ask (DKB groups only, an inert dash elsewhere), active switch, remove. Persona filter chips and a text filter above it. Below 1000px each row restacks into a labelled card.
+- **Controls:** 34px buttons and inputs, 8px radius; 12px radius on tables and panels; pill shape only for chips and switches. Icons are one inline SVG sprite, 1.75 stroke.
+- **Art:** `mahoraga_stare.jpg` appears only on the login screen, greyscale and masked. The kanji seal `八握剣異戒神将魔虚羅` runs vertically at low-opacity gold beside the hero and on the login art.
 
 ## DFII Evaluation
 

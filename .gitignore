@@ -72,3 +72,6 @@ docs/wiki/
 
 # Local runtime log dumps (may contain session key material)
 logs.md
+
+# Impeccable design tool working files (decision pages, reviews, briefs)
+.impeccable/
