@@ -179,7 +179,37 @@ Notes:
 - Changes to `deploy/termux/run.sh` itself take effect on the next
   `bash ~/botctl.sh restart` (or reboot), not on the automatic restart.
 - `AUTO_UPDATE_INTERVAL_SEC` (default 300) and `AUTO_UPDATE_BRANCH`
-  (default `main`) tune it.
+  (default `main`) tune it. They are read from `.env` (or the environment).
+- Dependencies are installed strictly from the committed lockfile. If
+  `package.json` and the lockfile disagree the install fails and the updater
+  rolls back, so commit both together.
+
+#### Only deploy signed commits (recommended)
+
+The updater runs whatever reaches the branch. Anyone who can push or merge
+there, or who gets into the GitHub account, gets code running on the phone
+that holds the WhatsApp session. To close that, set in `.env`:
+
+```
+AUTO_UPDATE_REQUIRE_SIGNED=true
+```
+
+The updater then runs `git verify-commit` on the new tip **before** checking it
+out, and refuses it (logging `REFUSED`) unless the signature verifies against
+keys trusted on the phone. One-time setup inside Debian, for SSH-signed
+commits:
+
+```bash
+cd ~/Whatsapp-bot
+mkdir -p ~/.config/git
+echo "you@example.com ssh-ed25519 AAAA...your-public-signing-key" > ~/.config/git/allowed_signers
+git config gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
+```
+
+Commits merged through the GitHub web UI are signed by GitHub's own key, not
+yours. Either merge locally and push a commit you signed, or import GitHub's
+web-flow GPG key on the phone if you want to trust web merges too. Check with
+`git verify-commit origin/main` before turning the setting on.
 
 ### Manual
 

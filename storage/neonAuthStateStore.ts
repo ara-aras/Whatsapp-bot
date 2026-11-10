@@ -110,10 +110,45 @@ async function readOne(pool: Pool, id: string): Promise<StorageValue> {
   return deserializeStateValue(result.rows[0].value);
 }
 
+/** Anything with pg's `query` — the pool, or one client inside a transaction. */
+type Queryable = Pick<Pool, "query">;
+
+/**
+ * Retries a key-store operation a few times, then THROWS.
+ *
+ * Signal key reads and writes must not fail silently. Reporting a failed read
+ * as "no such key" makes Baileys believe a session does not exist and build a
+ * new one over the top of it; dropping a failed write leaves the database
+ * behind the live ratchet. Either way the result is undecryptable messages
+ * and, eventually, a pairing that has to be redone. A thrown error fails only
+ * the one message being processed, and WhatsApp's retry receipts recover it.
+ */
+export async function withRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts = 3,
+  baseDelayMs = 200,
+): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, baseDelayMs * Math.pow(2, i)));
+      }
+    }
+  }
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  console.warn(`⚠️ ${label} failed after ${attempts} attempts: ${message}`);
+  throw lastError;
+}
+
 // Replaces 100 concurrent queries with 1 single bulk insert query.
 // This is critical to prevent connection exhaustion in serverless Postgres.
 async function upsertMany(
-  pool: Pool,
+  pool: Queryable,
   writes: { id: string; value: StorageValue }[],
 ): Promise<void> {
   if (writes.length === 0) return;
@@ -131,7 +166,7 @@ async function upsertMany(
   await pool.query(query);
 }
 
-async function deleteMany(pool: Pool, ids: string[]): Promise<void> {
+async function deleteMany(pool: Queryable, ids: string[]): Promise<void> {
   if (!ids.length) return;
 
   await pool.query(`DELETE FROM ${AUTH_TABLE} WHERE id = ANY($1::text[])`, [
@@ -212,63 +247,67 @@ export async function useNeonAuthState(
     creds: creds as AuthenticationCreds,
     keys: {
       get: async (type: string, ids: string[]) => {
-        try {
-          const keyIds = ids.map((id) =>
-            buildStorageKey(namespace, "key", type, id),
-          );
-          const rows = await readMany(pool!, keyIds);
-          const data: any = {};
+        const keyIds = ids.map((id) =>
+          buildStorageKey(namespace, "key", type, id),
+        );
+        // Throws on failure: an empty result here would mean "these keys do
+        // not exist", which is a different (and destructive) answer.
+        const rows = await withRetry("Reading auth keys from Neon", () =>
+          readMany(pool!, keyIds),
+        );
+        const data: any = {};
 
-          ids.forEach((id) => {
-            const dbKey = buildStorageKey(namespace, "key", type, id);
-            const value = rows.get(dbKey);
-            if (value) data[id] = value;
-          });
+        ids.forEach((id) => {
+          const dbKey = buildStorageKey(namespace, "key", type, id);
+          const value = rows.get(dbKey);
+          if (value) data[id] = value;
+        });
 
-          return data;
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          console.warn(`⚠️ Failed to read auth keys from Neon: ${message}`);
-          return {};
-        }
+        return data;
       },
       set: async (data: any) => {
-        try {
-          const writes: { id: string; value: StorageValue }[] = [];
-          const deletions: string[] = [];
+        const writes: { id: string; value: StorageValue }[] = [];
+        const deletions: string[] = [];
 
-          for (const [typeKey, typeData] of Object.entries(data)) {
-            for (const [id, value] of Object.entries(typeData as any)) {
-              const dbKey = buildStorageKey(namespace, "key", typeKey, id);
-              if (value) {
-                writes.push({ id: dbKey, value });
-              } else {
-                deletions.push(dbKey);
-              }
+        for (const [typeKey, typeData] of Object.entries(data)) {
+          for (const [id, value] of Object.entries(typeData as any)) {
+            const dbKey = buildStorageKey(namespace, "key", typeKey, id);
+            if (value) {
+              writes.push({ id: dbKey, value });
+            } else {
+              deletions.push(dbKey);
             }
           }
-
-          if (writes.length) await upsertMany(pool!, writes);
-          if (deletions.length) await deleteMany(pool!, deletions);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          console.warn(`⚠️ Failed to persist auth keys to Neon: ${message}`);
         }
+
+        await withRetry("Persisting auth keys to Neon", async () => {
+          if (writes.length && deletions.length) {
+            // One batch from Baileys is one state transition: apply the
+            // upserts and deletions together or not at all.
+            const { withTransaction } = await import("./db");
+            await withTransaction(pool!, async (client) => {
+              await upsertMany(client, writes);
+              await deleteMany(client, deletions);
+            });
+          } else if (writes.length) {
+            await upsertMany(pool!, writes);
+          } else if (deletions.length) {
+            await deleteMany(pool!, deletions);
+          }
+        });
       },
     } as any,
   };
 
   return {
     state,
+    // Throws after retries; the creds.update handler in bot.ts logs it. The
+    // next creds.update writes the full creds object again, so a missed save
+    // is recovered rather than lost.
     saveCreds: async () => {
-      try {
-        await upsertMany(pool!, [{ id: credsKey, value: state.creds }]);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`⚠️ Failed to persist auth creds to Neon: ${message}`);
-      }
+      await withRetry("Persisting auth creds to Neon", () =>
+        upsertMany(pool!, [{ id: credsKey, value: state.creds }]),
+      );
     },
     close: async () => {
       // No-op: pool lifecycle is managed by db.ts, not by the auth state store

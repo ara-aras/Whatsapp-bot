@@ -4,6 +4,7 @@ import {
   DisconnectReason,
   Browsers,
   proto,
+  generateMessageIDV2,
 } from "@whiskeysockets/baileys";
 import http from "http";
 import crypto from "crypto";
@@ -52,6 +53,8 @@ import { verifyApiKey } from "./storage/core/apiKeyRepository";
 import { registerContactSyncHandlers } from "./infrastructure/whatsapp/contactSync";
 import { registerLidMapperHandlers } from "./infrastructure/whatsapp/lidMapper";
 import { startReminderScheduler } from "./infrastructure/scheduler/reminderScheduler";
+import { rememberSentId } from "./core/sentMessages";
+import { checkOutbound } from "./security/outboundGuard";
 
 export const COMMAND_PREFIX = "!";
 export const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -60,13 +63,9 @@ const ALLOW_FROM_ME_MESSAGES =
   (process.env.ALLOW_FROM_ME_MESSAGES || "false").toLowerCase() === "true";
 const AI_MAX_SESSION_MESSAGES = 8;
 
-// Outgoing send caps. Per-JID limits how much any single recipient gets;
-// the global cap bounds total account-level outbound volume per minute, since
-// WhatsApp's spam detection is per-account and a per-JID limit alone can still
-// spike aggregate volume across many active chats. Global is env-tunable.
-const OUTGOING_PER_JID_PER_MIN = 5;
-const OUTGOING_GLOBAL_PER_MIN =
-  Number(process.env.OUTGOING_GLOBAL_PER_MIN) || 15;
+// Outgoing send caps (per recipient + account-wide) live in
+// security/outboundGuard.ts, including the in-memory fallback used when Redis
+// is unavailable.
 
 // U+2060 WORD JOINER — a zero-width, non-breaking invisible character used to
 // vary an otherwise-identical broadcast message body (see sendBotReply).
@@ -88,7 +87,35 @@ function scheduleReconnect(baseMs: number, reason: string): void {
   const delay = backoff + jitter;
   logStructured({ event: "reconnecting", reason, attempt, delayMs: delay });
   markReconnectAttempt(attempt);
-  setTimeout(() => startBot(), delay);
+  setTimeout(() => launchBot(), delay);
+}
+
+// startBot() is async and is re-run on every reconnect. A throw inside it used
+// to be an unhandled rejection, which kills the process and skips the backoff
+// above. Route failures back into the reconnect scheduler instead.
+function launchBot(): void {
+  startBot().catch((err) => {
+    logStructured({ event: "start_failed", error: describeError(err) });
+    scheduleReconnect(5000, "start_failed");
+  });
+}
+
+// Last-resort handlers. A stray rejection in a fire-and-forget promise should
+// be logged, not take the WhatsApp session down (every crash is a reconnect,
+// and reconnect storms are a ban signal). A synchronous uncaught exception
+// leaves the process in an unknown state, so that one still exits and lets the
+// supervisor restart us with backoff.
+let crashHandlersInstalled = false;
+function installCrashHandlers(): void {
+  if (crashHandlersInstalled) return;
+  crashHandlersInstalled = true;
+  process.on("unhandledRejection", (reason) => {
+    logEvent("error", { event: "unhandled_rejection", error: describeError(reason) });
+  });
+  process.on("uncaughtException", (err) => {
+    logEvent("error", { event: "uncaught_exception", error: describeError(err) });
+    process.exit(1);
+  });
 }
 
 // Session state lives exclusively in Redis (core/state.ts). The former
@@ -106,33 +133,15 @@ export async function sendBotReply(
   text: string,
 ): Promise<void> {
   // ── OUTGOING RATE GUARD ───────────────────────────────────────
-  try {
-    const { redis } = await import("./storage/redisClient");
-    const minute = Math.floor(Date.now() / 60000);
-
-    // Per-recipient cap first: cheap, and catches a flood aimed at one JID.
-    const minuteKey = `outgoing:${to}:${minute}`;
-    const outgoingCount = await redis.incr(minuteKey);
-    if (outgoingCount === 1) await redis.expire(minuteKey, 120);
-    if (outgoingCount > OUTGOING_PER_JID_PER_MIN) {
-      console.warn(
-        `[RateGuard] Suppressed outgoing to ${getJidHash(to)} — per-recipient limit reached (${outgoingCount}/${OUTGOING_PER_JID_PER_MIN})`,
-      );
-      return;
-    }
-
-    // Global account-level cap across ALL recipients this minute.
-    const globalKey = `outgoing:global:${minute}`;
-    const globalCount = await redis.incr(globalKey);
-    if (globalCount === 1) await redis.expire(globalKey, 120);
-    if (globalCount > OUTGOING_GLOBAL_PER_MIN) {
-      console.warn(
-        `[RateGuard] Suppressed outgoing — global account cap reached (${globalCount}/${OUTGOING_GLOBAL_PER_MIN})`,
-      );
-      return;
-    }
-  } catch {
-    /* fail open — never block on Redis error */
+  // Never fails open: when Redis is down the guard counts in memory instead.
+  const verdict = await checkOutbound(to);
+  if (verdict.denied) {
+    console.warn(
+      verdict.denied === "per_recipient"
+        ? `[RateGuard] Suppressed outgoing to ${getJidHash(to)} — per-recipient limit reached (${verdict.count}/${verdict.limit}, ${verdict.source})`
+        : `[RateGuard] Suppressed outgoing — global account cap reached (${verdict.count}/${verdict.limit}, ${verdict.source})`,
+    );
+    return;
   }
 
   try {
@@ -700,21 +709,29 @@ async function startBot(): Promise<void> {
   activeSocket = sock;
   markConnecting();
 
-  // Intercept and cache all bot-sent message IDs to prevent self-loops
+  // Record every bot-sent message ID so its echo is never handled as an owner
+  // message. The ID is chosen and recorded BEFORE the send: Baileys emits the
+  // echo on the next tick, ahead of anything written after the send returns.
   const originalSendMessage = sock.sendMessage.bind(sock);
-  sock.sendMessage = async (...args: any[]) => {
-    const result = await (originalSendMessage as any)(...args);
-    markOutbound();
-    if (result && result.key && result.key.id) {
-      try {
-        const { redis } = await import("./storage/redisClient");
-        await redis.setex(`bot_sent_msg:${result.key.id}`, 600, "1");
-      } catch (err) {
-        console.error("[LoopPrevention] Failed to cache sent message ID:", err);
-      }
+  const recordSentId = async (id: string): Promise<void> => {
+    rememberSentId(id); // synchronous, in-process: closes the race
+    try {
+      // Redis copy covers an echo that arrives after a restart.
+      const { redis } = await import("./storage/redisClient");
+      await redis.setex(`bot_sent_msg:${id}`, 600, "1");
+    } catch (err) {
+      console.error("[LoopPrevention] Failed to cache sent message ID:", describeError(err));
     }
-    return result;
   };
+  sock.sendMessage = (async (jid: string, content: any, options: any = {}) => {
+    const messageId: string = options?.messageId || generateMessageIDV2(sock.user?.id);
+    await recordSentId(messageId);
+    const result = await (originalSendMessage as any)(jid, content, { ...options, messageId });
+    markOutbound();
+    const actualId = result?.key?.id;
+    if (actualId && actualId !== messageId) await recordSentId(actualId);
+    return result;
+  }) as typeof sock.sendMessage;
 
   sock.ev.on("creds.update", async () => {
     try {
@@ -850,4 +867,5 @@ async function startBot(): Promise<void> {
   });
 }
 
-startBot();
+installCrashHandlers();
+launchBot();

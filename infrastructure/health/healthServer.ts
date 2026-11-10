@@ -6,31 +6,21 @@ import { getBotStatus, isHealthy } from "./botStatus";
 import { renderAdminPage } from "./adminPage";
 import { handleAdminApi } from "./adminApi";
 import { handlePublicApi } from "../api/publicApi";
+import { clientIp, isBlocked, recordAuthFailure, recordAuthSuccess } from "./authThrottle";
 
 let isHealthServerStarted = false;
 
 /**
  * Admin auth: single shared token from ADMIN_TOKEN, sent as
- * `Authorization: Bearer <token>`. Constant-time compare, and a small
- * in-memory failure counter per IP so the token can't be brute-forced
- * through Render's public URL.
+ * `Authorization: Bearer <token>`. Constant-time compare, and a failure
+ * counter per client address (authThrottle.ts, shared with /api/v1) so the
+ * token can't be brute-forced through a public URL.
  */
-const failedAttempts = new Map<string, { count: number; blockedUntil: number }>();
-const MAX_FAILS = 10;
-const BLOCK_MS = 15 * 60 * 1000;
-
-function clientIp(req: http.IncomingMessage): string {
-  const fwd = req.headers["x-forwarded-for"];
-  const first = Array.isArray(fwd) ? fwd[0] : fwd?.split(",")[0];
-  return (first || req.socket.remoteAddress || "unknown").trim();
-}
-
 function isAuthorized(req: http.IncomingMessage): boolean {
   const expected = process.env.ADMIN_TOKEN || "";
   if (!expected) return false;
   const ip = clientIp(req);
-  const rec = failedAttempts.get(ip);
-  if (rec && rec.blockedUntil > Date.now()) return false;
+  if (isBlocked(ip)) return false;
 
   const header = req.headers.authorization || "";
   const presented = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
@@ -39,13 +29,50 @@ function isAuthorized(req: http.IncomingMessage): boolean {
   const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
 
   if (ok) {
-    failedAttempts.delete(ip);
+    recordAuthSuccess(ip);
     return true;
   }
-  const next = { count: (rec?.count || 0) + 1, blockedUntil: 0 };
-  if (next.count >= MAX_FAILS) next.blockedUntil = Date.now() + BLOCK_MS;
-  failedAttempts.set(ip, next);
+  recordAuthFailure(ip);
   return false;
+}
+
+// Only these image types live in assets/, and only a flat file name is
+// accepted: no separators, no dot-segments, no empty name.
+const ASSET_NAME = /^[a-zA-Z0-9_-]+\.(png|webp|jpe?g)$/i;
+const ASSET_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+};
+
+function notFound(res: http.ServerResponse): void {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.writeHead(404, { "Content-Type": "text/plain" });
+  res.end("Not found");
+}
+
+function serveAsset(res: http.ServerResponse, name: string): void {
+  if (!ASSET_NAME.test(name)) return notFound(res);
+  const assetPath = nodePath.join(process.cwd(), "assets", name);
+  fs.stat(assetPath, (err, st) => {
+    // isFile() matters: a directory passes existsSync, then the read stream
+    // fails with EISDIR, which used to be an uncaught error that killed the
+    // process on an unauthenticated request.
+    if (err || !st.isFile()) return notFound(res);
+    const stream = fs.createReadStream(assetPath);
+    stream.on("error", () => notFound(res));
+    stream.once("open", () => {
+      res.writeHead(200, {
+        "Content-Type": ASSET_TYPES[nodePath.extname(name).toLowerCase()] || "application/octet-stream",
+        "Cache-Control": "public, max-age=86400",
+      });
+      stream.pipe(res);
+    });
+  });
 }
 
 function json(res: http.ServerResponse, code: number, body: unknown): void {
@@ -96,20 +123,7 @@ export function startHealthServer(): void {
     }
 
     if (adminEnabled && path.startsWith("/admin/asset/")) {
-      const safeFile = path.slice("/admin/asset/".length).replace(/[^a-zA-Z0-9_\-\.]/g, "");
-      const assetPath = nodePath.join(process.cwd(), "assets", safeFile);
-      if (fs.existsSync(assetPath)) {
-        const ext = nodePath.extname(assetPath).toLowerCase();
-        const contentType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-        res.writeHead(200, {
-          "Content-Type": contentType,
-          "Cache-Control": "public, max-age=86400",
-        });
-        fs.createReadStream(assetPath).pipe(res);
-        return;
-      }
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not found");
+      serveAsset(res, path.slice("/admin/asset/".length));
       return;
     }
 

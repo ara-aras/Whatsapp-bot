@@ -143,6 +143,30 @@ describe("admin dashboard", () => {
     expect(res.status).toBe(404);
   });
 
+  it("serves a real asset and survives every malformed asset path", async () => {
+    const ok = await req("/admin/asset/mahoraga_wheel.jpg");
+    expect(ok.status).toBe(200);
+    expect(ok.type).toBe("image/jpeg");
+
+    // "/admin/asset/" used to resolve to the assets directory and crash the
+    // process with an uncaught EISDIR.
+    for (const p of [
+      "/admin/asset/",
+      "/admin/asset/.",
+      "/admin/asset/..%2f.env",
+      "/admin/asset/..",
+      "/admin/asset/nope.png",
+      "/admin/asset/mahoraga_wheel.jpg/",
+      "/admin/asset/.env",
+    ]) {
+      const res = await req(p);
+      expect(res.status, p).not.toBe(500);
+      expect(res.type, p).not.toMatch(/image/);
+    }
+    // Still alive afterwards.
+    expect((await req("/health")).status).toBeGreaterThan(0);
+  });
+
   it("locks an IP out after repeated bad tokens", async () => {
     for (let i = 0; i < 10; i++) await req("/admin/api/status", { token: "wrong" + i });
     // Even the right token is refused while blocked.

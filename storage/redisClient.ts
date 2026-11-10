@@ -8,8 +8,17 @@ if (!REDIS_URL) {
   process.exit(1);
 }
 
+// Commands must be able to FAIL. With `maxRetriesPerRequest: null` ioredis
+// queues every command forever while Redis is unreachable, so callers never
+// reach their catch blocks: message handlers hang and the queue grows without
+// bound. A finite value makes a command reject after that many reconnect
+// attempts, which is what every "fall back if Redis is down" path relies on.
+// The client itself keeps reconnecting in the background regardless.
+const MAX_RETRIES = Number(process.env.REDIS_MAX_RETRIES_PER_REQUEST) || 3;
+
 export const redis = new Redis(REDIS_URL, {
-  maxRetriesPerRequest: null,
+  maxRetriesPerRequest: MAX_RETRIES,
+  connectTimeout: 10000,
   retryStrategy(times) {
     const delay = Math.min(times * 50, 2000);
     return delay;

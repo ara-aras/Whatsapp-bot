@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import http from "http";
+import { resetAuthThrottle } from "../../infrastructure/health/authThrottle";
 import {
   configurePublicApi,
   handlePublicApi,
@@ -113,6 +114,24 @@ describe("checkRecipient (pure policy)", () => {
   it("enforces bot scope on scoped keys", () => {
     expect(checkRecipient(dkbOp, "111@g.us", groups, chats, admins)).toBeNull();
     expect(checkRecipient(dkbOp, "222@g.us", groups, chats, admins)).toBe("bot_scope_mismatch");
+  });
+});
+
+describe("failed-auth lockout (shared with the admin API)", () => {
+  beforeEach(() => resetAuthThrottle());
+  afterAll(() => resetAuthThrottle());
+
+  it("blocks further attempts after repeated bad credentials, even a valid one", async () => {
+    for (let i = 0; i < 10; i++) {
+      expect((await call("/api/v1/status", { token: "guess-" + i })).status).toBe(401);
+    }
+    expect((await call("/api/v1/status", { token: "guess-x" })).status).toBe(429);
+    expect((await call("/api/v1/status", { token: ADMIN })).status).toBe(429);
+  });
+
+  it("does not count requests that present no credential", async () => {
+    for (let i = 0; i < 15; i++) await call("/api/v1/status");
+    expect((await call("/api/v1/status", { token: ADMIN })).status).toBe(200);
   });
 });
 

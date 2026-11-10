@@ -47,6 +47,7 @@ import {
 import { redis } from "../storage/redisClient";
 import { logEvent } from "../utils/logger";
 import { cacheMessageForContext } from "../utils/contextWindow";
+import { wasSentByThisProcess } from "./sentMessages";
 
 // Owner-away auto-responder (agents/Generic). Off unless explicitly enabled.
 const GENERIC_AUTORESPONDER_ENABLED =
@@ -111,10 +112,15 @@ async function processInboundMessage(
     const msgId = msg.key?.id;
     let isSentByBot = false;
     if (msgId && msg.key?.fromMe) {
-      try {
-        isSentByBot = (await redis.exists(`bot_sent_msg:${msgId}`)) === 1;
-      } catch {
-        /* fail safe */
+      // In-process record first: it is written before the send, so it cannot
+      // lose a race with the echo. Redis covers IDs from before a restart.
+      isSentByBot = wasSentByThisProcess(msgId);
+      if (!isSentByBot) {
+        try {
+          isSentByBot = (await redis.exists(`bot_sent_msg:${msgId}`)) === 1;
+        } catch {
+          /* Redis down: the in-process record above is authoritative */
+        }
       }
     }
     if (isSentByBot) {

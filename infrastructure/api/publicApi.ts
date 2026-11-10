@@ -19,6 +19,7 @@
 import http from "http";
 import crypto from "crypto";
 import type { ApiKeyRecord, ApiKeyRole } from "../../storage/core/apiKeyRepository";
+import { clientIp, isBlocked, recordAuthFailure, recordAuthSuccess } from "../health/authThrottle";
 
 export interface Principal {
   kind: "admin" | "key";
@@ -174,11 +175,21 @@ export async function handlePublicApi(
   }
   const now = (deps.now || Date.now)();
 
+  // ADMIN_TOKEN is accepted here too, so this surface shares the admin
+  // lockout. Checked before any key lookup so a blocked client costs no DB query.
+  const ip = clientIp(req);
+  if (isBlocked(ip, now)) {
+    json(res, 429, { error: "too_many_failed_attempts" });
+    return;
+  }
   const principal = await authenticate(req);
   if (!principal) {
+    // Only a presented-but-wrong credential counts; a bare request does not.
+    if ((req.headers?.authorization || "").trim()) recordAuthFailure(ip, now);
     json(res, 401, { error: "unauthorized" });
     return;
   }
+  recordAuthSuccess(ip);
   if (throttled(principal.kind === "admin" ? "admin" : `key:${principal.keyId}`, now)) {
     json(res, 429, { error: "rate_limited", limitPerMin: API_PER_MIN });
     return;

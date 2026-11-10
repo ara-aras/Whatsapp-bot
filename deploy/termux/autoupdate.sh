@@ -11,8 +11,25 @@ set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 LOG_FILE="${LOG_FILE:-$HOME/whatsapp-bot-logs/bot.log}"
-BRANCH="${AUTO_UPDATE_BRANCH:-main}"
-INTERVAL="${AUTO_UPDATE_INTERVAL_SEC:-60}"
+
+# Settings come from the environment, else from .env, else the default.
+# run.sh does not export .env, so without this lookup the AUTO_UPDATE_* lines
+# in .env were silently ignored. The value is read as text, never sourced.
+setting() {
+  local key="$1" default="$2" val="${!1:-}"
+  if [ -z "$val" ] && [ -f "$REPO_DIR/.env" ]; then
+    val="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$REPO_DIR/.env" 2>/dev/null | tail -n 1 \
+      | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]+#.*$//; s/^["'"'"']//; s/["'"'"'][[:space:]]*$//; s/[[:space:]]+$//')"
+  fi
+  echo "${val:-$default}"
+}
+
+BRANCH="$(setting AUTO_UPDATE_BRANCH main)"
+INTERVAL="$(setting AUTO_UPDATE_INTERVAL_SEC 300)"
+# true = only deploy commits whose signature git can verify (see docs/termux.md).
+REQUIRE_SIGNED="$(setting AUTO_UPDATE_REQUIRE_SIGNED false)"
+case "$BRANCH" in *[!A-Za-z0-9._/-]*|"") BRANCH="main" ;; esac
+case "$INTERVAL" in *[!0-9]*|"") INTERVAL=300 ;; esac
 RESTART_FLAG="$REPO_DIR/.restart-requested"
 
 # Avoid git hanging on terminal credential prompts in background
@@ -26,14 +43,29 @@ failed_commit=""
 cd "$REPO_DIR"
 log() { echo "[autoupdate] $(date -u +%FT%TZ) $*" >> "$LOG_FILE"; }
 
+# Install exactly what the committed lockfile says. An unfrozen install lets
+# the registry decide which versions run on this phone; a frozen one fails
+# (and rolls back) if package.json and the lockfile disagree.
 install_deps() {
-  if command -v pnpm >/dev/null 2>&1; then
-    log "installing via pnpm..."
-    NODE_ENV=development pnpm install --prod=false --frozen-lockfile=false >>"$LOG_FILE" 2>&1
+  if command -v pnpm >/dev/null 2>&1 && [ -f "$REPO_DIR/pnpm-lock.yaml" ]; then
+    log "installing via pnpm (frozen lockfile)..."
+    NODE_ENV=development pnpm install --prod=false --frozen-lockfile >>"$LOG_FILE" 2>&1
   else
-    log "installing via npm..."
-    NODE_ENV=development npm install --include=dev --no-audit --no-fund >>"$LOG_FILE" 2>&1
+    log "installing via npm ci..."
+    NODE_ENV=development npm ci --include=dev --no-audit --no-fund >>"$LOG_FILE" 2>&1
   fi
+}
+
+# With AUTO_UPDATE_REQUIRE_SIGNED=true, a commit is deployed only if git can
+# verify its signature against keys trusted on THIS device. Without it, anyone
+# who can push to the branch (or who takes over the GitHub account) runs code
+# on the phone that holds the WhatsApp session.
+signature_ok() {
+  case "$(echo "$REQUIRE_SIGNED" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes) ;;
+    *) return 0 ;;
+  esac
+  git verify-commit "$1" >>"$LOG_FILE" 2>&1
 }
 
 restart_bot() {
@@ -71,6 +103,14 @@ update_once() {
   new="$(git rev-parse "origin/$BRANCH" 2>/dev/null)" || { log "git rev-parse origin/$BRANCH failed"; return; }
   [ "$old" = "$new" ] && return
   [ "$new" = "$failed_commit" ] && return
+
+  # Checked before the working tree is touched: an unverified commit is never
+  # checked out, installed or built.
+  if ! signature_ok "$new"; then
+    failed_commit="$new"
+    log "REFUSED ${new:0:7}: signature not verified (AUTO_UPDATE_REQUIRE_SIGNED=true); staying on ${old:0:7}"
+    return
+  fi
 
   # Check if package dependencies changed between commits
   git diff --quiet "$old" "$new" -- package.json package-lock.json pnpm-lock.yaml 2>/dev/null || deps_changed=1
@@ -145,7 +185,7 @@ rollback() {
     || log "dependency reinstall during rollback failed - check the log"
 }
 
-log "watching origin/$BRANCH every ${INTERVAL}s"
+log "watching origin/$BRANCH every ${INTERVAL}s (require signed commits: $REQUIRE_SIGNED)"
 while true; do
   update_once
   sleep "$INTERVAL"
